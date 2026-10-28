@@ -126,6 +126,7 @@ test("3 配送: now、次の入力、手で、409 と timeout を区別する", 
     expect(await page.evaluate(() => navigator.clipboard.readText())).toMatch(/^\/rmp \d{8}-\d{6}-\d{6}$/);
     await expect(overlay.locator(".rmp-toolbar")).not.toContainText("送信中", { timeout: 15_000 });
     rmp.rmvAvailable = true;
+    const why = { draft: "書きかけがあるため", permission: "返事を待っているため", stale: "別の会話が開かれているため" };
     for (const mode of ["draft", "permission", "stale"] as const) {
       await expect(overlay.locator(".rmp-toast:not([data-rmp-ticket])")).toHaveCount(0, { timeout: 10_000 });
       rmp.mode = mode;
@@ -133,7 +134,7 @@ test("3 配送: now、次の入力、手で、409 と timeout を区別する", 
       const beforeTickets = await rmp.tickets();
       await dragRange(page, 430, 330);
       await rmp.send(page);
-      await expect(overlay.locator(".rmp-toast")).toContainText("手で: コピーしました", { timeout: 15_000 });
+      await expect(overlay.locator(".rmp-toast")).toContainText(why[mode], { timeout: 15_000 });
       expect(rmp.calls.filter((call) => call === "deliver")).toHaveLength(beforeCalls + 1);
       const ticket = (await rmp.tickets()).find((value) => !beforeTickets.includes(value));
       expect(ticket).toBeTruthy();

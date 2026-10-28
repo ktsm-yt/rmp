@@ -1,7 +1,7 @@
 import type { InboxSendResult, TargetList } from "../inboxSend";
 import type { Annotation, Rect } from "../types";
 import {
-  DraftDebouncer, documentRect, keyAction, newAnnotation, nextMode, rangeText, scrollOffset,
+  DraftDebouncer, documentRect, keyAction, manualToast, newAnnotation, nextMode, rangeText, scrollOffset,
   selectMark, selectorFor, startDeliveryWatch, type Mode,
 } from "./logic";
 
@@ -792,7 +792,7 @@ class Overlay {
       this.renderMarks();
       this.renderStrokes();
       const ticket = reply.result.ticket;
-      if (reply.route === "manual" && ticket) await this.copyText(`/rmp ${ticket}`, "手で: コピーしました");
+      if (reply.route === "manual" && ticket) await this.copyText(`/rmp ${ticket}`, manualToast(reply.result.deliver));
       else this.toast(reply.route === "now" ? "今すぐ: 届けました" : reply.route === "next" ?
         "次の入力で知らせます" : reply.route === "pending" ? "配送の返事を待っています。60秒後に未読なら手で届けられます" : "受信箱に保存しました");
       await this.drafts.clear();

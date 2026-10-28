@@ -198,3 +198,21 @@ export function startDeliveryWatch(
     if (route === "pending") void copyText(`/rmp ${ticket}`, "手で: 未読のためコピーしました");
   }, clock);
 }
+
+// Why rmv did not type /rmp into the target (its 409 / 403 / 404 reason), so a manual copy says what to fix.
+const MANUAL_WHY: Record<string, string> = {
+  draft: "宛先の入力欄に書きかけがある",
+  permission_pending: "宛先が許可か質問の返事を待っている",
+  stale: "宛先の端末で別の会話が開かれている",
+  unverified: "宛先の今の会話か入力欄を確かめられない",
+  not_live: "宛先の端末が閉じているか動いていない",
+  not_enabled: "rmv がこの拡張からの打ち込みを受け付けていない",
+  unknown_session: "rmv がこの会話を知らない",
+  rmv_unreachable: "rmv が動いていない",
+  rmv_error: "rmv がエラーを返した",
+};
+
+export function manualToast(deliver?: string): string {
+  const why = deliver ? MANUAL_WHY[deliver] : undefined;
+  return why ? `手で: ${why}ためコピーしました` : "手で: コピーしました";
+}

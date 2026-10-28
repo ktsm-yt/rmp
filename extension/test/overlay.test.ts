@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { DraftDebouncer, keyAction, newAnnotation, nextMode, rangeText, selectMark, selectorFor, startDeliveryWatch, startTicketWatch } from "../src/overlay/logic.js";
+import { DraftDebouncer, keyAction, manualToast, newAnnotation, nextMode, rangeText, selectMark, selectorFor, startDeliveryWatch, startTicketWatch } from "../src/overlay/logic.js";
 
 const key = (over: Partial<Parameters<typeof keyAction>[0]> = {}) => keyAction({
   key: "Enter", metaKey: false, isComposing: false, keyCode: 13, isTrusted: true, inComment: false, listOpen: false, ...over,
@@ -200,5 +200,14 @@ describe("ticket watcher cancellation", () => {
     await vi.advanceTimersByTimeAsync(1000);
     expect(write.mock.calls).toEqual([[[]]]);
     vi.useRealTimers();
+  });
+});
+
+describe("manual copy toast", () => {
+  it("says why rmv did not type the ticket, and stays short when there is no reason", () => {
+    expect(manualToast("draft")).toBe("手で: 宛先の入力欄に書きかけがあるためコピーしました");
+    expect(manualToast("stale")).toContain("別の会話");
+    expect(manualToast(undefined)).toBe("手で: コピーしました");
+    expect(manualToast("rmv_timeout")).toBe("手で: コピーしました");
   });
 });
