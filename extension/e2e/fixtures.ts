@@ -198,6 +198,7 @@ export class RmpFixture {
     const inboxPort = await port();
     const rmvPort = await port();
     this.debugPort = await port();
+    await mkdir(join(root, "extension/e2e-results"), { recursive: true }); // a fresh clone has no e2e-results yet
     (this as { temp: string }).temp = await mkdtemp(join(root, "extension/e2e-results/case-"));
     (this as { inboxRoot: string }).inboxRoot = join(this.temp, "inbox");
     const sessions = join(this.temp, "sessions");

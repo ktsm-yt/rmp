@@ -33,7 +33,7 @@ rmp では、その赤を入れる体験を、いつものブラウザで見て�
 
 ## 入れる
 
-macOS 前提です。Node.js と npm、Python 3.9 以降 (`/usr/bin/python3`)、Claude Code を使います。
+macOS 前提です。Node.js 22.12 以降と npm、Python 3.9 以降 (`/usr/bin/python3`)、Claude Code を使います。
 
 ```sh
 git clone https://github.com/ktsm-yt/rmp.git
@@ -129,9 +129,11 @@ repo のルートで実行します。
 python3 -m unittest inbox/test_rmp_inbox.py
 cd extension
 npm ci
+npx playwright install chromium   # e2e 用のブラウザ (初回だけ)
+npm run build
+npm run build:test                # 単体試験が試験用ビルドの manifest も見るため
 npm run test
 npm run typecheck
-npm run build
 npm run e2e
 ```
 
