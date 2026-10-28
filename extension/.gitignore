@@ -1,0 +1,8 @@
+node_modules/
+dist/
+dist-test/
+e2e-results/
+test-results/
+profile*/
+*.pem
+*.key

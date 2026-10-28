@@ -1,0 +1,11 @@
+# 手元の開発用ハーネスと作業メモ (dev-harness の配布物)。公開しない
+.claude/
+hooks/dev-harness/
+.claude-code-harness.config.yaml
+handoff.md
+Plans.md
+.worktrees/
+.DS_Store
+docs/design.md
+docs/PORTED.md
+docs/stage2-decisions.md

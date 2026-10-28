@@ -1,0 +1,20 @@
+{
+  "name": "red-marker-page-extension",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "build:test": "node build.mjs --test",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "e2e": "npm run build:test && playwright test",
+    "check": "tsc --noEmit -p . && vitest run && npm run e2e && node build.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@types/chrome": "0.0.306",
+    "esbuild": "0.28.2",
+    "typescript": "5.9.3",
+    "vitest": "5.0.5"
+  }
+}

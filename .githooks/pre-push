@@ -1,0 +1,43 @@
+#!/bin/sh
+# 1. 手元だけの開発用ファイル (.claude 等) を含む履歴を送らない。旧 repo (remote archive) の履歴が手元に残っているため
+# 2. main に feat/fix を入れる push は、それを含む v* タグも一緒に (または先に) push されていることを求める (rmv と同じ)
+# 3. v* タグは extension/manifest.json の version と一致させる
+# 有効化: git config core.hooksPath .githooks (clone ごとに 1 回)
+refs=$(cat)
+zero=0000000000000000000000000000000000000000
+while read -r _ lsha rref _; do
+  [ -z "$lsha" ] || [ "$lsha" = "$zero" ] && continue
+  leak=$(git log --format='%h %s' "$lsha" --not --remotes="$1" -- .claude hooks/dev-harness handoff.md Plans.md .claude-code-harness.config.yaml | head -3)
+  if [ -n "$leak" ]; then
+    printf 'pre-push: %s に手元だけのファイル (.claude 等) を含む commit があります。旧履歴の枝やタグを送っていないか確かめてください:\n%s\n' "$rref" "$leak" >&2
+    exit 1
+  fi
+  case "$rref" in
+    refs/tags/v*)
+      tag=${rref#refs/tags/}
+      ver=$(git show "$lsha:extension/manifest.json" | sed -n 's/.*"version": *"\([^"]*\)".*/\1/p')
+      if [ "v$ver" != "$tag" ]; then
+        printf 'pre-push: タグ %s と extension/manifest.json の version (%s) が違います\n' "$tag" "$ver" >&2
+        exit 1
+      fi
+      if echo "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.0$' && [ -z "$RMP_MINOR_OK" ]; then
+        printf 'pre-push: 真ん中を上げる版 (v0.x.0) です。CHANGELOG.md の決まり 11 を確かめ、合っていれば RMP_MINOR_OK=1 を付けて push し直してください:\n' >&2
+        grep -E '^11\. ' CHANGELOG.md >&2
+        exit 1
+      fi ;;
+  esac
+  [ "$rref" = refs/heads/main ] || continue
+  # 最初の版を付けるまでは describe が失敗し、版の確認は飛ばす
+  tag=$(git describe --tags --abbrev=0 --match 'v*' "$lsha" 2>/dev/null) || continue
+  bad=$(git log --format='%h %s' "$tag..$lsha" | grep -E '^[0-9a-f]+ (feat|fix)[(:!]')
+  if [ -n "$bad" ]; then
+    printf 'pre-push: %s より後の feat/fix に版がありません。CHANGELOG.md に節を書き、manifest の version を上げ、v* タグを付けて一緒に push してください:\n%s\n' "$tag" "$bad" >&2
+    exit 1
+  fi
+  echo "$refs" | grep -q " refs/tags/$tag " && continue
+  [ -n "$(git ls-remote --tags "$1" "refs/tags/$tag")" ] && continue
+  printf 'pre-push: タグ %s がまだ remote にありません。git push %s main %s で一緒に送ってください\n' "$tag" "$1" "$tag" >&2
+  exit 1
+done <<REFS
+$refs
+REFS
