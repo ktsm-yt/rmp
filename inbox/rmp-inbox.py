@@ -60,6 +60,8 @@ PORT = int(os.environ.get("RMP_INBOX_PORT") or 8766)
 MAX_BODY = 30 * 1024 * 1024  # pen screenshots ride along as JPEG data URLs
 DEFAULT_ORIGINS = (
     "chrome-extension://kgdkanfbaiakfcncpfdllehhenoplheg",
+    # Firefox picks a random UUID per profile; pin this one in about:config extensions.webextensions.uuids.
+    "moz-extension://e9f3dda0-0bd4-4cb6-b23c-243a430e4c3c",
 )
 ALLOWED_ORIGINS = frozenset(
     origin.strip() for origin in os.environ.get("RMP_INBOX_ORIGINS", ",".join(DEFAULT_ORIGINS)).split(",") if origin.strip()
