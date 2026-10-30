@@ -682,12 +682,33 @@ class Handler(BaseHTTPRequestHandler):
             sys.stderr.write(f"403 {self.command} {urlsplit(self.path).path} Origin={self.headers.get('Origin')!r}\n")
         body = b"" if payload is None else json.dumps(payload, ensure_ascii=False).encode()
         self.send_response(code)
+        self._cors()
         if payload is not None:
             self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         if body:
             self.wfile.write(body)
+
+    def _cors(self):
+        # Firefox applies CORS to extension fetches despite host permissions (measured 2026-10-30, Zen:
+        # status 200 but the body blocked). Only allowed origins get the header, so web pages still cannot read.
+        if self._allowed():
+            self.send_header("Access-Control-Allow-Origin", self.headers["Origin"])
+            self.send_header("Vary", "Origin")
+
+    def do_OPTIONS(self):
+        """Preflight for Firefox: X-RMP-To on /done is not a simple header."""
+        if urlsplit(self.path).path not in ("/sessions", "/done", "/draft", "/status") or not self._allowed():
+            self._reply(403)
+            return
+        self.send_response(204)
+        self._cors()
+        self.send_header("Access-Control-Allow-Methods", "GET, POST")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-RMP-To")
+        self.send_header("Access-Control-Max-Age", "600")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def _body(self, limit):
         try:

@@ -953,6 +953,21 @@ class Server(unittest.TestCase):
                 code = error.code
             self.assertEqual(code, expected)
 
+    def test_cors_header_and_preflight_only_for_allowed_origins(self):
+        firefox = "moz-extension://e9f3dda0-0bd4-4cb6-b23c-243a430e4c3c"
+        def call(method, path, origin):
+            req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", headers={"Origin": origin}, method=method)
+            try:
+                with urllib.request.urlopen(req) as r:
+                    return r.status, r.headers.get("Access-Control-Allow-Origin"), r.headers.get("Access-Control-Allow-Headers")
+            except urllib.error.HTTPError as e:
+                return e.code, e.headers.get("Access-Control-Allow-Origin"), None
+        self.assertEqual(call("GET", "/sessions", firefox)[:2], (200, firefox))
+        self.assertEqual(call("OPTIONS", "/done", firefox), (204, firefox, "Content-Type, X-RMP-To"))
+        self.assertEqual(call("GET", "/sessions", "https://example.com")[:2], (403, None))
+        self.assertEqual(call("OPTIONS", "/done", "https://example.com")[:2], (403, None))
+        self.assertEqual(call("OPTIONS", "/other", firefox)[:2], (403, firefox))
+
     def test_other_origin_is_refused(self):
         code, _ = self.post("/done", SEND, origin="https://example.com")
         self.assertEqual(code, 403)
