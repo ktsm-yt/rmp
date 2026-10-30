@@ -129,6 +129,8 @@ class Overlay {
       .rmp-hover{border-style:dashed;background:#e5484d0d}
       .rmp-mark{position:fixed;z-index:2147483646;border:2px solid #fff;padding:0;color:#fff;background:#e5484d;border-radius:50%;width:24px;height:24px;font:600 12px/20px system-ui,sans-serif;text-align:center;box-shadow:0 1px 4px #00000040}
       .rmp-mark:hover{background:#dc2626}
+      .rmp-note{position:fixed;z-index:2147483646;max-width:min(280px,calc(100vw - 16px));padding:3px 9px;border:0;border-radius:6px;background:#18181b;color:#fff;font-size:12px;overflow:hidden;text-overflow:ellipsis;box-shadow:0 1px 4px #00000040}
+      .rmp-note:hover{background:#3f3f46}
       .rmp-mark[aria-pressed=true]{box-shadow:0 0 0 3px #e5484d59,0 1px 4px #00000040}
       .rmp-card{position:fixed;z-index:2147483647;width:320px;max-width:calc(100vw - 16px);padding:12px;background:#fff;color:#18181b;border:1px solid #e4e4e7;border-radius:14px;box-shadow:0 10px 32px #00000029,0 1px 3px #00000014}
       .rmp-card-head,.rmp-card-foot{display:flex;align-items:center;gap:8px}
@@ -512,6 +514,18 @@ class Overlay {
         this.focusMark(annotation, event.shiftKey);
       };
       this.layer.append(frame, mark);
+      // The comment's first line under the mark, so the marks can be read without opening each one.
+      const [line, ...more] = annotation.comment?.trim().split("\n") ?? [];
+      if (line && !(on && this.editor)) {
+        const note = document.createElement("button");
+        note.className = "rmp-note";
+        note.textContent = more.length ? `${line} …` : line;
+        note.title = annotation.comment!.trim();
+        note.style.left = `${Math.max(8, left)}px`;
+        note.style.top = `${rect.y + rect.height - scrollOffset("y") + 4}px`;
+        note.onclick = mark.onclick;
+        this.layer.append(note);
+      }
     }
     const count = this.shadow.querySelector(".rmp-count");
     if (count) count.textContent = `注釈 ${this.annotations.length}`;
@@ -589,7 +603,7 @@ class Overlay {
 
   private saveComment(close: boolean): void {
     this.updateComment();
-    if (close && this.editor) { this.editor = null; this.card?.remove(); this.card = null; }
+    if (close && this.editor) { this.editor = null; this.card?.remove(); this.card = null; this.renderMarks(); }
   }
 
   // Esc: close the comment and deselect; a selected mark that still has no comment is dropped.
@@ -824,7 +838,7 @@ class Overlay {
   }
 
   private async screenshot(): Promise<Screenshot> {
-    const hidden = [...this.shadow.querySelectorAll<HTMLElement>(".rmp-toolbar,.rmp-penbar,.rmp-list,.rmp-card,.rmp-toast,.rmp-hover")];
+    const hidden = [...this.shadow.querySelectorAll<HTMLElement>(".rmp-toolbar,.rmp-penbar,.rmp-list,.rmp-card,.rmp-toast,.rmp-hover,.rmp-note")];
     for (const element of hidden) element.style.visibility = "hidden";
     try {
       await new Promise(requestAnimationFrame);

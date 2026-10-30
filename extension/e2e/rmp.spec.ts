@@ -675,3 +675,27 @@ test("18 コメント欄は背景をドラッグして動かせ、再描画で�
     await expect(overlay.locator("textarea")).toHaveValue("前後");
   });
 });
+
+test("19 保存したコメントは印の下に 1 行だけ出て、長いものは省略され、押すとコメント欄が開く", async () => {
+  await withFixture(1, async (rmp) => {
+    const page = await rmp.open();
+    const overlay = page.locator("#rmp-overlay-root");
+    const field = overlay.locator("textarea");
+    const note = overlay.locator(".rmp-note");
+    await dragRange(page);
+    await field.fill("とても長いコメントの 1 行目".repeat(6));
+    await field.press("Shift+Enter");
+    await field.pressSequentially("2 行目");
+    // The note of the comment being written is not shown.
+    await expect(note).toHaveCount(0);
+    await field.press("Enter");
+    await expect(field).toBeHidden();
+    await expect(note).toHaveCount(1);
+    await expect(note).toHaveText(/1 行目 …$/);
+    expect(await note.evaluate((el) => el.scrollWidth > el.clientWidth && el.getBoundingClientRect().height < 30)).toBe(true);
+    await note.click();
+    await expect(field).toBeVisible();
+    await expect(field).toHaveValue(/2 行目$/);
+    await expect(note).toHaveCount(0);
+  });
+});

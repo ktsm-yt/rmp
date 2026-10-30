@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Red Marker Page",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqb3duMomo10aUK+uMzWcAtzvSR6324UY2UD9ggtf5OcKmrbb30CDGO/XR88cLAo3PuJ7EGmCuP8x2BZ6FfTw3wD05XtukYshe98B7NQnxFq3rdt1gKt/oDV/zOOjhHk4JhLEUveKpavVDHMDfbCLH2g0l8PseZPkDEuizm01mI8pZDNNJpWShWClmw6qd/BqbT9eGaER1UAp5Tn2bqx4OIxn4cdHqi27KKV6HrTPowntRQZWJ7ynAw06CXeK8ehsfpKIuRoK1Vj7fd3WxSwUpUCxxL8pA/LHUSHls7hgRrRRLWI89H/y+uac85GT0lammQohktkabtbnVAJYkl8JVQIDAQAB",
   "permissions": ["activeTab", "scripting", "storage", "sidePanel"],
   "host_permissions": ["http://127.0.0.1:8766/*", "http://127.0.0.1:4310/*", "file:///*"],
