@@ -64,6 +64,8 @@ class Overlay {
   private leftPen = false;
   // Where the pen bar was dragged to (it is built again on every render); null keeps it at the bottom centre.
   private penBarAt: Point | null = null;
+  // The comment card was dragged, so it stops following its mark until it closes.
+  private cardMoved = false;
   private pointer: { x: number; y: number } | null = null;
   // Shapes in document px: `shapes` wait for Enter, `inks` stay drawn with the mark they became.
   private drawing: PenShape | null = null;
@@ -147,7 +149,8 @@ class Overlay {
       .rmp-close{border:0;background:transparent;color:#71717a;font-size:16px;line-height:1;padding:4px 6px}
       .rmp-penbar .rmp-close{color:#a1a1aa}
       .rmp-canvas.pen{pointer-events:auto;cursor:crosshair;touch-action:none}
-      .rmp-toolbar,.rmp-penbar{cursor:grab}
+      .rmp-toolbar,.rmp-penbar,.rmp-card{cursor:grab}
+      .rmp-card textarea{cursor:text}
       button svg{display:block}
       .rmp-penbar{position:fixed;z-index:2147483647;left:50%;bottom:24px;transform:translateX(-50%);display:flex;gap:4px;align-items:center;padding:6px;background:#18181bf0;border-radius:12px;box-shadow:0 6px 20px #0000004d;max-width:calc(100vw - 24px);flex-wrap:wrap}
       .rmp-penbar button{border-color:transparent;background:transparent;color:#e4e4e7;padding:5px 10px}
@@ -550,6 +553,8 @@ class Overlay {
     for (const type of ["keydown", "keypress", "keyup"]) field.addEventListener(type, (event) => event.stopPropagation());
     this.editor = field;
     this.card = card;
+    this.cardMoved = false;
+    this.draggable(card, () => { this.cardMoved = true; });
     card.append(head, field, foot);
     this.shadow.append(card);
     this.positionEditor();
@@ -562,6 +567,7 @@ class Overlay {
     this.card.querySelector(".rmp-badge")!.textContent = numbers;
     this.card.querySelector("strong")!.textContent = `注釈 ${numbers}`;
     this.card.setAttribute("aria-label", `注釈 ${numbers} のコメント欄`);
+    if (this.cardMoved) return;
     const annotation = this.annotations.find((a) => a.displayNumber === this.selected[0]);
     const element = annotation && this.elements.get(annotation);
     const rect = element?.isConnected ? documentRect(element.getBoundingClientRect()) : annotation?.displayRect ?? annotation?.imageRect;
@@ -650,12 +656,12 @@ class Overlay {
     if (this.mode === "pen") this.shadow.append(this.penBar());
   }
 
-  // A bar moves when dragged by its background; its buttons still click.
+  // A bar (or the comment card) moves when dragged by its background; its buttons and the comment field still work.
   // ponytail: the spot is not kept in the window after a resize or across page loads.
   // The pen bar is built again on renders (even mid-drag), so the drag moves whichever bar is current.
   private draggable(bar: HTMLElement, save: (at: Point) => void, current = () => bar): void {
     bar.addEventListener("pointerdown", (event) => {
-      if (event.button !== 0 || (event.target as Element).closest("button")) return;
+      if (event.button !== 0 || (event.target as Element).closest("button,textarea")) return;
       event.preventDefault();
       const box = bar.getBoundingClientRect(), dx = event.clientX - box.left, dy = event.clientY - box.top;
       const move = (e: PointerEvent) => {

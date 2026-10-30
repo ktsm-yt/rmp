@@ -652,3 +652,26 @@ test("17 コメント欄で打った j / k はページの近道キーに届か�
     await expect(page.locator("body")).not.toHaveAttribute("data-shortcut");
   });
 });
+
+test("18 コメント欄は背景をドラッグして動かせ、再描画でも印の横へ戻らず、そのまま打てる", async () => {
+  await withFixture(1, async (rmp) => {
+    const page = await rmp.open();
+    const overlay = page.locator("#rmp-overlay-root");
+    const card = overlay.locator(".rmp-card");
+    await dragRange(page);
+    await overlay.locator("textarea").fill("前");
+    const before = (await card.boundingBox())!;
+    // Grab the card's own padding, not the field or a button.
+    await page.mouse.move(before.x + 4, before.y + 4);
+    await page.mouse.down();
+    await page.mouse.move(before.x + 4 + 150, before.y + 4 + 60, { steps: 5 });
+    await page.mouse.up();
+    const after = (await card.boundingBox())!;
+    expect([Math.round(after.x - before.x), Math.round(after.y - before.y)]).toEqual([150, 60]);
+    await page.evaluate(() => dispatchEvent(new Event("resize")));
+    expect(await card.boundingBox()).toEqual(after);
+    await overlay.locator("textarea").focus();
+    await page.keyboard.type("後");
+    await expect(overlay.locator("textarea")).toHaveValue("前後");
+  });
+});
