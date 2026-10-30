@@ -375,7 +375,9 @@ class Overlay {
 
   private onClick(event: MouseEvent): void {
     if (!event.isTrusted || !this.active || this.isOurs(event) || this.mode !== "element" || this.sending || event.button !== 0) return;
-    if (this.dragged) { this.dragged = false; event.preventDefault(); event.stopImmediatePropagation(); return; }
+    // A drag opened its comment on mouseup, before the page's own mouseup handlers (which may focus a field of the
+    // page), so the comment takes the focus back here, as an element mark opened on click keeps it.
+    if (this.dragged) { this.dragged = false; event.preventDefault(); event.stopImmediatePropagation(); this.editor?.focus({ preventScroll: true }); return; }
     const smallest = event.metaKey || event.ctrlKey;
     const target = this.elementAt(event.clientX, event.clientY, smallest);
     if (!target) return;

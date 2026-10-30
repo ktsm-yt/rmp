@@ -554,6 +554,9 @@ test("15 要素モードで文字の上から押すと文字を選び、余白�
       await page.mouse.up();
     };
     const line = await page.evaluate(() => {
+      // A page that focuses its own field on mouseup must not take the focus from the comment.
+      const field = document.body.appendChild(document.createElement("input"));
+      addEventListener("mouseup", () => field.focus());
       const range = document.createRange();
       range.selectNodeContents(document.querySelector("main")!.firstChild!);
       const box = range.getBoundingClientRect();
@@ -561,6 +564,7 @@ test("15 要素モードで文字の上から押すと文字を選び、余白�
     });
     await drag([line.left + 2, line.middle], [(line.left + line.right) / 2, line.middle]);
     await expect(overlay.locator(".rmp-mark")).toHaveCount(1);
+    await expect(overlay.locator("textarea")).toBeFocused();
     await overlay.locator("textarea").fill("文字");
     // Shift adds the next selection to the open comment, as with elements.
     await page.keyboard.down("Shift");
@@ -572,6 +576,7 @@ test("15 要素モードで文字の上から押すと文字を選び、余白�
     // From the blank part of the same box, the drag still draws a range.
     await drag([line.left + 2, line.middle + 50], [line.left + 150, line.middle + 100]);
     await expect(overlay.locator(".rmp-mark")).toHaveCount(3);
+    await expect(overlay.locator("textarea")).toBeFocused();
     await overlay.locator("textarea").fill("矩形");
     await page.keyboard.press("Enter");
     await rmp.screenshot(page, "15-text-first");
