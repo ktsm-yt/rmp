@@ -54,6 +54,17 @@ describe("extension boundary", () => {
     for (const base of testBases) expect(testBundle).toContain(base);
     for (const base of productBases) expect(productBundle).toContain(base);
   });
+  it("derives the Firefox manifest from the product one", async () => {
+    const product = JSON.parse(await readFile(join(root, "dist", "manifest.json"), "utf8")) as Record<string, any>;
+    const firefox = JSON.parse(await readFile(join(root, "dist-firefox", "manifest.json"), "utf8")) as Record<string, any>;
+    expect(firefox.permissions).toEqual(["activeTab", "scripting", "storage"]);
+    expect(firefox.host_permissions).toEqual(product.host_permissions);
+    expect(firefox.background).toEqual({ scripts: ["background.js"], type: "module" });
+    expect([firefox.key, firefox.side_panel, firefox.commands["open-rmv-panel"]]).toEqual([undefined, undefined, undefined]);
+    expect(firefox.commands._execute_sidebar_action).toEqual(product.commands["open-rmv-panel"]);
+    expect(firefox.sidebar_action.default_panel).toBe(product.side_panel.default_path);
+    expect(checkManifest(firefox)).toEqual([]);
+  });
   it("catches a forbidden permission", () => {
     expect(checkManifest({ permissions: ["tabs"] })).toEqual(["tabs"]);
     expect(checkManifest({ optional_permissions: ["debugger"] })).toEqual(["debugger"]);

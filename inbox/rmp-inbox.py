@@ -675,6 +675,9 @@ class Handler(BaseHTTPRequestHandler):
         return self.headers.get("Origin") in ALLOWED_ORIGINS
 
     def _reply(self, code, payload=None):
+        if code == 403:
+            # serve.log names the origin to add to RMP_INBOX_ORIGINS (Firefox: moz-extension://<per-profile UUID>).
+            sys.stderr.write(f"403 {self.command} {urlsplit(self.path).path} Origin={self.headers.get('Origin')!r}\n")
         body = b"" if payload is None else json.dumps(payload, ensure_ascii=False).encode()
         self.send_response(code)
         if payload is not None:

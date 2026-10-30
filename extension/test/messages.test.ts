@@ -41,5 +41,8 @@ describe("runtime message boundary", () => {
     expect(validMessage(message, { id: "extension", url: "chrome-extension://extension/pdfjs/web/viewer.html" }, "extension")).toBe(true);
     expect(validMessage(message, { id: "extension", url: "chrome-extension://extension/other.html" }, "extension")).toBe(false);
     expect(validMessage(message, { id: "extension", url: "chrome-extension://other/pdfjs/web/viewer.html" }, "extension")).toBe(false);
+    const firefox = "moz-extension://0f3c5e4a-1111-2222-3333-444455556666/pdfjs/web/viewer.html";
+    expect(validMessage(message, { id: "extension", url: `${firefox}?file=x` }, "extension", firefox)).toBe(true);
+    expect(validMessage(message, { id: "extension", url: firefox }, "extension")).toBe(false);
   });
 });

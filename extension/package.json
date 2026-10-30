@@ -5,10 +5,11 @@
   "scripts": {
     "build": "node build.mjs",
     "build:test": "node build.mjs --test",
+    "build:firefox": "node build.mjs --firefox",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "e2e": "npm run build:test && playwright test",
-    "check": "tsc --noEmit -p . && vitest run && npm run e2e && node build.mjs"
+    "check": "tsc --noEmit -p . && node build.mjs --firefox && vitest run && npm run e2e && node build.mjs"
   },
   "devDependencies": {
     "@playwright/test": "1.64.1",

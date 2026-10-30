@@ -44,11 +44,13 @@ export function validMessage(
   value: unknown,
   sender: chrome.runtime.MessageSender,
   extensionId: string,
+  // Firefox pages live at moz-extension://<per-profile UUID>/, not at the extension ID.
+  viewerUrl = `chrome-extension://${extensionId}/${VIEWER}`,
 ): value is PageMessage {
   let extensionPage = false;
   try {
     const url = new URL(sender.url ?? "");
-    extensionPage = url.protocol === "chrome-extension:" && url.host === extensionId && url.pathname === `/${VIEWER}`;
+    extensionPage = `${url.protocol}//${url.host}${url.pathname}` === viewerUrl;
   } catch { /* page messages still require a tab */ }
   if (sender.id !== extensionId || (!extensionPage && (!Number.isInteger(sender.tab?.id) || sender.tab!.id! < 0)) ||
       (sender.frameId !== undefined && sender.frameId !== 0) || !record(value) || "tabId" in value) return false;

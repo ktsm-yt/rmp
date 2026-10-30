@@ -6,3 +6,5 @@ test-results/
 profile*/
 *.pem
 *.key
+dist-firefox/
+dist-test-firefox/

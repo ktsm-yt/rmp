@@ -79,11 +79,11 @@ export function createBackground(api: typeof chrome, fetchImpl: typeof fetch = f
   }
 
   async function handle(raw: unknown, sender: chrome.runtime.MessageSender): Promise<unknown> {
-    if (!validMessage(raw, sender, api.runtime.id)) throw new Error("拡張への依頼が不正です");
+    if (!validMessage(raw, sender, api.runtime.id, api.runtime.getURL(VIEWER))) throw new Error("拡張への依頼が不正です");
     let tabId = sender.tab?.id;
     if (tabId === undefined && sender.url?.startsWith(api.runtime.getURL(VIEWER))) {
       const documentId = (sender as chrome.runtime.MessageSender & { documentId?: string }).documentId;
-      const contexts = documentId ? await api.runtime.getContexts({ documentIds: [documentId] }) : [];
+      const contexts = documentId && api.runtime.getContexts ? await api.runtime.getContexts({ documentIds: [documentId] }) : [];
       if (contexts.length === 1 && Number.isInteger(contexts[0].tabId) && contexts[0].tabId! >= 0) tabId = contexts[0].tabId;
     }
     switch (raw.type) {
@@ -172,7 +172,8 @@ if (typeof chrome !== "undefined" && chrome.runtime?.id) {
     port.onDisconnect.addListener(() => { if (panels.get(windowId) === port) panels.delete(windowId); });
   });
   const openPanel = (windowId: number | undefined) => {
-    if (windowId !== undefined) chrome.sidePanel.open({ windowId }).catch(report);
+    // Firefox has no sidePanel; its sidebar opens from the toolbar or _execute_sidebar_action.
+    if (windowId !== undefined) chrome.sidePanel?.open({ windowId }).catch(report);
   };
 
   chrome.action.onClicked.addListener((tab) => { void background.activate(tab, false).catch(failed(tab.id)); });
