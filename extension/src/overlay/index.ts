@@ -21,7 +21,8 @@ const ICONS = {
   undo: '<path d="M9 5 4 10l5 5"/><path d="M4 10h10a5 5 0 0 1 0 10h-3"/>',
   done: '<path d="m5 12 5 5 9-10"/>',
   close: '<path d="M6 6l12 12M18 6 6 18"/>',
-  // A viewfinder's corners: the 📷 emoji came out in colour beside the drawn icons.
+  // The modes are drawn too: the 📷 emoji came out in colour beside these.
+  pick: '<path d="M14 4.1 12 6"/><path d="m5.1 8-2.9-.8"/><path d="m6 12-1.9 2"/><path d="M7.2 2.2 8 5.1"/><path d="M9.04 9.69a.5.5 0 0 1 .65-.65l11 4.5a.5.5 0 0 1-.07.95l-4.35 1.04a1 1 0 0 0-.74.74l-1.04 4.35a.5.5 0 0 1-.95.07z"/>',
   shot: '<path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><circle cx="12" cy="12" r="3"/>',
 };
 const icon = (name: keyof typeof ICONS, size = 16) =>
@@ -618,7 +619,8 @@ class Overlay {
     modes.setAttribute("aria-label", "モード (Tab で切り替え)");
     for (const mode of Object.keys(modeName) as Mode[]) {
       const button = this.button(modeName[mode], async () => this.setMode(mode));
-      if (mode === "pen") { button.innerHTML = icon("shot", 20); button.setAttribute("aria-label", "撮影"); }
+      button.innerHTML = icon(mode === "pen" ? "shot" : "pick", 20);
+      button.setAttribute("aria-label", mode === "pen" ? "撮影" : "要素");
       button.title = modeHint[mode];
       button.setAttribute("aria-pressed", String(mode === this.mode));
       modes.append(button);
