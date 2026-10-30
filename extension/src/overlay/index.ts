@@ -35,6 +35,9 @@ const PEN_COLORS = ["#e5484d", "#f5a623", "#1f6fd6"];
 type ViewerRangeImage = { image: string; imageRect: Rect };
 type Screenshot = { image: string; imageRect?: Rect };
 
+// Why a capture failed, so the toast can be acted on (it was swallowed: 2026-10-30).
+const reason = (error: unknown) => error instanceof Error ? error.message : String(error);
+
 async function request<T>(message: object): Promise<T> {
   const response = await chrome.runtime.sendMessage(message);
   if (response?.error) throw new Error(response.error);
@@ -857,7 +860,7 @@ class Overlay {
       this.shot = shot;
       this.still.src = shot.image;
       this.shadow.prepend(this.still);
-    } catch { this.toast("撮影できませんでした。動いている画面に描きます"); }
+    } catch (error) { this.toast(`撮影できませんでした (${reason(error)})。動いている画面に描きます`); }
     finally { this.capturing = false; }
   }
   private unfreeze(): void { this.still.remove(); this.still.removeAttribute("src"); this.shot = null; }
@@ -972,7 +975,7 @@ class Overlay {
       if (annotation) this.inks.set(annotation, shapes);
       if (toElement) this.setMode("element");
       this.leftPen = this.mode === "element";
-    } catch { this.toast("撮影できませんでした。描いた線は残しています"); }
+    } catch (error) { this.toast(`撮影できませんでした (${reason(error)})。描いた線は残しています`); }
     finally { this.capturing = false; this.renderStrokes(); }
   }
   private renderStrokes(): void {
