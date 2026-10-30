@@ -8,3 +8,4 @@ profile*/
 *.key
 dist-firefox/
 dist-test-firefox/
+web-ext-artifacts/
