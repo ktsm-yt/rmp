@@ -638,8 +638,7 @@ class Overlay {
     const chip = this.button(option ? `宛先: ${option.label} [${routeName(option.delivery)}]` :
       this.picked?.sid === null ? "宛先なし [手で]" : "宛先を選ぶ", () => this.openTargets());
     chip.className = "rmp-chip";
-    this.toolbar.append(chip,
-      this.button("タブ ID", () => this.copyTabId()));
+    this.toolbar.append(this.button("タブ ID", () => this.copyTabId()), chip);
     const send = this.button("送る", () => this.send());
     send.classList.add("rmp-primary");
     const close = this.icon("close", "終了", () => this.close());
