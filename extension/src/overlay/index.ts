@@ -21,9 +21,11 @@ const ICONS = {
   undo: '<path d="M9 5 4 10l5 5"/><path d="M4 10h10a5 5 0 0 1 0 10h-3"/>',
   done: '<path d="m5 12 5 5 9-10"/>',
   close: '<path d="M6 6l12 12M18 6 6 18"/>',
+  // A viewfinder's corners: the 📷 emoji came out in colour beside the drawn icons.
+  shot: '<path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><circle cx="12" cy="12" r="3"/>',
 };
-const icon = (name: keyof typeof ICONS) =>
-  `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
+const icon = (name: keyof typeof ICONS, size = 16) =>
+  `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
 // The pen: box / arrow / line, 3 colours (the idea after Orca's markup tool, MIT; no Orca code).
 type PenTool = "rect" | "arrow" | "pen";
 type PenShape = { tool: PenTool; color: string; points: Point[] };
@@ -616,7 +618,7 @@ class Overlay {
     modes.setAttribute("aria-label", "モード (Tab で切り替え)");
     for (const mode of Object.keys(modeName) as Mode[]) {
       const button = this.button(modeName[mode], async () => this.setMode(mode));
-      if (mode === "pen") button.setAttribute("aria-label", "撮影");
+      if (mode === "pen") { button.innerHTML = icon("shot", 20); button.setAttribute("aria-label", "撮影"); }
       button.title = modeHint[mode];
       button.setAttribute("aria-pressed", String(mode === this.mode));
       modes.append(button);
