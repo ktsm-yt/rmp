@@ -122,6 +122,7 @@ test("3 配送: now、次の入力、手で、409 と timeout を区別する", 
     // Headless Chromium lets the extension write the clipboard even without the permission, so the
     // copy-failure toast cannot be produced with real input here; this checks the manual route.
     await overlay.getByRole("button", { name: "宛先なし [手で]" }).click();
+    await overlay.getByRole("button", { name: "送る", exact: true }).click();
     await expect(overlay.locator(".rmp-toast")).toContainText("手で: コピーしました", { timeout: 15_000 });
     expect(await page.evaluate(() => navigator.clipboard.readText())).toMatch(/^\/rmp \d{8}-\d{6}-\d{6}$/);
     await expect(overlay.locator(".rmp-toolbar")).not.toContainText("送信中", { timeout: 15_000 });
@@ -522,6 +523,10 @@ test("11 キー: Esc で空の印を消す、Backspace で選んだ印を消す�
     await overlay.locator(".rmp-chip").click();
     await expect(overlay.locator(".rmp-list")).toBeVisible();
     await page.keyboard.press("0");
+    // Picking from the chip only sets the destination: the mark stays until ⌘Enter.
+    await expect(overlay.locator(".rmp-toast")).toContainText("宛先を決めました");
+    await expect(marks).toHaveCount(1);
+    await page.keyboard.press("ControlOrMeta+Enter");
     await expect(overlay.locator(".rmp-toast")).toContainText("手で: コピーしました", { timeout: 15_000 });
     await expect(marks).toHaveCount(0);
   });

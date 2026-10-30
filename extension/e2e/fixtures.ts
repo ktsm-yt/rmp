@@ -381,6 +381,7 @@ export class RmpFixture {
     await expect(overlay.locator(".rmp-list")).toBeVisible();
     await expect(destination).toBeVisible({ timeout: 10_000 });
     await destination.click();
+    await overlay.getByRole("button", { name: "送る", exact: true }).click();
     await expect.poll(() => this.tickets(sid), { timeout: 15_000 }).toHaveLength(before.length + 1);
     await expect(overlay.locator(".rmp-mark")).toHaveCount(0, { timeout: 15_000 });
     await expect(overlay.locator(".rmp-toast")).toContainText(/届けました|コピーしました|知らせます|待っています/, { timeout: 15_000 });

@@ -76,6 +76,9 @@ class Overlay {
   private penColor = PEN_COLORS[0]!;
   private list: TargetList | undefined;
   private picked: { sid: string | null } | undefined;
+  // Only the list a ⌘Enter opened ("which session?") sends on a pick; picking from the chip just sets the destination,
+  // so more marks can still be added before sending.
+  private sendOnPick = false;
   private readonly watches = new Set<() => void>();
   private sending = false;
   private capturing = false;
@@ -710,6 +713,7 @@ class Overlay {
   private async openTargets(): Promise<void> {
     if (this.sending) return;
     this.saveComment(true);
+    this.sendOnPick = false;
     this.list = await request<TargetList>({ type: "rmp:targets", url: location.href, picked: this.picked });
     if (this.active) this.renderList(this.list);
   }
@@ -768,8 +772,11 @@ class Overlay {
     this.shadow.querySelector(".rmp-list")?.remove();
     this.picked = { sid };
     this.renderToolbar();
-    if (this.annotations.length) await this.send();
-    else await request({ type: "rmp:pick", url: location.href, sid });
+    const send = this.sendOnPick;
+    this.sendOnPick = false;
+    if (send && this.annotations.length) return this.send();
+    await request({ type: "rmp:pick", url: location.href, sid });
+    if (this.annotations.length) this.toast("宛先を決めました。⌘Enter か『送る』で送ります");
   }
 
   private async send(): Promise<void> {
@@ -783,7 +790,7 @@ class Overlay {
       const annotations = this.annotations.map(({ displayRect: _displayRect, ...annotation }) => annotation);
       const reply = await request<SendReply>({ type: "rmp:send", url: location.href,
         annotations, picked: this.picked });
-      if (reply.kind === "pick") { if (this.active) this.renderList(reply.list); return; }
+      if (reply.kind === "pick") { this.sendOnPick = true; if (this.active) this.renderList(reply.list); return; }
       if (!reply.result.ok) {
         this.toast(reply.result.reason === "inbox_timeout" ?
           "届いたか分からない。/rmp で確かめてから送り直す" : "送信できませんでした。注釈は残しています");
