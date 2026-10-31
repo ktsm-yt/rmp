@@ -2,7 +2,7 @@
 
 <img src="docs/rmp-icon.svg" alt="RMP" width="112">
 
-ブラウザのページや PDF に赤ペンで印とコメントを付け、そのまま Claude Code の会話へ送る Chrome 拡張です。
+ブラウザのページや PDF に赤ペンで印とコメントを付け、そのまま Claude Code の会話へ送る Chrome / Firefox 拡張です。
 [rmv](https://github.com/ktsm-yt/rmv) (Claude Code の返事を見るビューア) と一緒に使うのがおすすめです。rmv が『返事に赤を入れる』のに対し、rmp は『見ているページに赤を入れる』側です。
 
 ![ページに赤を入れ、宛先を選び、rmv で受信を確認するデモ](docs/demo.gif)
@@ -58,6 +58,26 @@ cd extension && npm ci && npm run build
 
 権限は `activeTab`、`scripting`、`storage`、`sidePanel`。通信先は手元の `127.0.0.1:8766` (受信箱) と `127.0.0.1:4310` (rmv) だけです。
 
+### Firefox / Zen に入れる
+
+Firefox 140 以降 (Zen など Firefox 系を含む) は、Mozilla の署名を受けた `.xpi` を入れます。ストアには公開していません。
+
+1. [Releases](https://github.com/ktsm-yt/rmp/releases) から最新の `red-marker-page-<版>.xpi` を落とす。
+2. ブラウザの窓へドラッグ＆ドロップするか、`about:addons` の歯車 →『ファイルからアドオンをインストール』で選ぶ。
+3. `about:config` の `extensions.webextensions.uuids` で、`red-marker-page@ktsm-yt.github.io` の値を `e9f3dda0-0bd4-4cb6-b23c-243a430e4c3c` にしてブラウザを再起動する。
+
+3 は拡張の送り元を固定するためです。Firefox は送り元 (`moz-extension://<UUID>`) をプロファイルごとにランダムに決めるので、固定しないと受信箱が 403 で断ります。別の UUID を使う時は、受信箱の `RMP_INBOX_ORIGINS` に `chrome-extension://kgdkanfbaiakfcncpfdllehhenoplheg,moz-extension://<UUID>` を渡します (断った送り元は受信箱のログに出ます)。
+
+rmv は Firefox ではサイドバーに開きます (`⌘⇧,`)。キーは `about:addons` の歯車 →『拡張機能のショートカットキーを管理』で変えられます。自動更新は無いので、新しい版は 1 から入れ直します。
+
+署名済みの `.xpi` を作るのは次の手順です (AMO の API キーが要ります)。`manifest.json` の `version` は署名ごとに上げます。
+
+```sh
+cd extension && npm run build:firefox
+npx web-ext sign --channel=unlisted --source-dir dist-firefox --api-key="$AMO_JWT_ISSUER" --api-secret="$AMO_JWT_SECRET"
+# → web-ext-artifacts/*.xpi を red-marker-page-<版>.xpi に改名して Releases に添付する
+```
+
 ### rmv と連携する
 
 [rmv](https://github.com/ktsm-yt/rmv) は無くても動きますが、一緒に使うのがおすすめです。入れていると、送った注釈を『今すぐ』会話へ打ち込めて、rmv をサイドパネルで開けます。
@@ -71,6 +91,8 @@ cd extension && npm ci && npm run build
 ```sh
 RMV_EXT_ORIGINS=chrome-extension://kgdkanfbaiakfcncpfdllehhenoplheg
 ```
+
+Firefox / Zen から使う時は、カンマで続けて `moz-extension://e9f3dda0-0bd4-4cb6-b23c-243a430e4c3c` も足します。
 
 ## 赤入れする
 
