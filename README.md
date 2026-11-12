@@ -37,7 +37,35 @@ rmp では、その赤を入れる体験を、いつものブラウザで見て�
 
 ## 入れる
 
-macOS 前提です。Node.js 22.12 以降と npm、Python 3.9 以降 (`/usr/bin/python3`)、Claude Code を使います。
+macOS 前提です。Claude Code を使います。
+
+### Claude Code に入れてもらう (おすすめ)
+
+Claude Code を開き、次の文をそのまま貼ってください。
+ターミナルの作業と設定は Claude Code がやります。あなたが手で行うのは、最後のブラウザでの読み込みだけです。
+
+```text
+rmp (https://github.com/ktsm-yt/rmp) を入れて。手順は次のとおり。
+1. ~/rmp に git clone する (もうあれば git pull)。
+2. bash ~/rmp/inbox/install.sh を実行する。
+3. 表示された hook の JSON を ~/.claude/settings.json の "hooks" に足す。先にファイルを ~/.claude/settings.json.bak に写し、今ある設定は消さずに配列へ並べる。
+4. https://github.com/ktsm-yt/rmp/releases/latest/download/rmp-chrome.zip を落とし、~/rmp/extension/dist に展開する (manifest.json が dist の直下に来るように)。
+5. rmv を入れていれば、rmv の README『rmp とつなぐ』のとおり rmv の state/env に 1 行足して rmv を再起動する。入れていなければ飛ばす。
+6. 最後に、Chrome で拡張を読み込む手順を私に 1 手ずつ案内する。読み込むフォルダは ~/rmp/extension/dist。Firefox / Zen を使うと私が言ったら、rmp の README『Firefox / Zen に入れる』の手順を代わりに案内する。
+途中でエラーが出たら、直そうとする前に何が起きたかを教えて。
+```
+
+Claude Code が最後に案内するブラウザでの操作は、次の 3 つです。
+
+1. Chrome 系ブラウザで `chrome://extensions` を開き、デベロッパーモードを ON にする。
+2. 『パッケージ化されていない拡張機能を読み込む』で `~/rmp/extension/dist` を選ぶ。
+3. PDF に赤を入れるなら、拡張の詳細で『ファイルの URL へのアクセスを許可する』を ON にする。
+
+`git` や `python3` を初めて使う Mac では、途中で『コマンドライン・デベロッパ・ツール』を入れるか聞かれます。『インストール』を押し、終わったら Claude Code に「続けて」と伝えてください。
+
+### 手で入れる
+
+Node.js 22.12 以降と npm、Python 3.9 以降 (`/usr/bin/python3`) を使います。Node.js を使わない場合は、`npm` の行の代わりに [Releases](https://github.com/ktsm-yt/rmp/releases) の `rmp-chrome.zip` を `extension/dist` に展開します。
 
 ```sh
 git clone https://github.com/ktsm-yt/rmp.git
@@ -46,9 +74,7 @@ bash inbox/install.sh          # 受信箱 (127.0.0.1:8766 の常駐) と /rmp s
 cd extension && npm ci && npm run build
 ```
 
-1. Chrome 系ブラウザで `chrome://extensions` を開き、デベロッパーモードを ON にする。
-2. 『パッケージ化されていない拡張機能を読み込む』で `extension/dist` を選ぶ。
-3. PDF に赤を入れるなら、拡張の詳細で『ファイルの URL へのアクセスを許可する』を ON にする。
+ブラウザでの読み込み方は上の『Claude Code に入れてもらう』の 1〜3 と同じです (選ぶフォルダは clone した場所の `extension/dist`)。
 
 `install.sh` の最後に、Claude Code の hook の設定 (任意) が表示されます。`~/.claude/settings.json` に貼ると、送った注釈が次の入力で会話に届きます。スクリプトは settings.json を書き換えません。
 
