@@ -1,4 +1,6 @@
-# v* タグの push で、CHANGELOG.md の同じ版の節を本文にした GitHub Release を作る
+# v* タグの push で、CHANGELOG.md の同じ版の節を本文にした GitHub Release を作り、
+# 組み上げた Chrome 用の拡張を rmp-chrome.zip として添付する (使う人が Node.js を入れずに済むように)。
+# 名前に版を入れないのは、README の releases/latest/download/rmp-chrome.zip で常に最新を指すため。
 name: release
 
 on:
@@ -13,6 +15,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+      - name: Chrome 用の拡張を組み上げて zip にする
+        working-directory: extension
+        run: |
+          npm ci
+          npm run build
+          (cd dist && zip -qr ../../rmp-chrome.zip .)
       - name: CHANGELOG の節を取り出してリリースを作る
         env:
           GH_TOKEN: ${{ github.token }}
@@ -23,4 +36,4 @@ jobs:
             echo "CHANGELOG.md に ## $TAG の節が無い" >&2
             exit 1
           fi
-          gh release create "$TAG" --title "$TAG" --notes-file notes.md
+          gh release create "$TAG" --title "$TAG" --notes-file notes.md rmp-chrome.zip
