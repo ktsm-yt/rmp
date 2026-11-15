@@ -704,3 +704,104 @@ test("19 保存したコメントは印の下に 1 行だけ出て、長いも�
     await expect(note).toHaveCount(0);
   });
 });
+
+// Like bdui: a press on the dialog itself (its backdrop) closes it, Esc closes it; and like other sites, a click whose
+// point is outside the dialog's box closes it too. The bar sits outside the box, so its clicks must not get there.
+// #early comes first in the document but is opened later, on top of #d.
+function modalSite(_request: unknown, response: import("node:http").ServerResponse): void {
+  response.setHeader("content-type", "text/html; charset=utf-8");
+  response.end(`<main style='margin:80px'>裏のページ</main>
+    <dialog id='early' style='width:200px;height:100px'>前の dialog</dialog>
+    <dialog id='d' style='width:300px;height:160px;overflow:hidden'><p id='inside' style='font:20px sans-serif'>ダイアログの中の文</p></dialog>
+    <script>
+      const d = document.getElementById("d");
+      d.dataset.cancels = "0";
+      d.dataset.keys = "0";
+      d.addEventListener("cancel", () => { d.dataset.cancels = String(Number(d.dataset.cancels) + 1); });
+      d.addEventListener("keydown", () => { d.dataset.keys = String(Number(d.dataset.keys) + 1); });
+      d.addEventListener("mousedown", (e) => { if (e.target === d) d.close(); });
+      d.addEventListener("click", (e) => { const r = d.getBoundingClientRect();
+        if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) d.close(); });
+      d.showModal();
+    </script>`);
+}
+
+test("20 ページが showModal で出したダイアログの上でもバーが押せ、印を付けて送れ、閉じると元に戻る", async () => {
+  await withFixture(1, async (rmp) => {
+    rmp.setSite(modalSite);
+    const page = await rmp.open();
+    const overlay = page.locator("#rmp-overlay-root");
+    const dialog = page.locator("#d");
+    const reachable = async () => page.evaluate(() => {
+      const bar = document.querySelector("#rmp-overlay-root")!.shadowRoot!.querySelector(".rmp-toolbar")!.getBoundingClientRect();
+      return document.elementFromPoint(bar.left + 20, bar.top + bar.height / 2)?.id;
+    });
+    const parent = () => page.evaluate(() => document.querySelector("#rmp-overlay-root")?.parentElement?.id || document.querySelector("#rmp-overlay-root")?.parentElement?.tagName);
+    // The modal was open before the bar came up.
+    await expect(dialog).toHaveAttribute("open", "");
+    expect(await reachable()).toBe("rmp-overlay-root");
+    await overlay.locator(".rmp-modes").getByRole("button", { name: "要素", exact: true }).click({ timeout: 3_000 });
+    await expect(dialog).toHaveAttribute("open", "");
+    // A mark on the text inside the dialog, and Esc in its comment closes the comment only.
+    const inside = (await page.locator("#inside").boundingBox())!;
+    await page.mouse.click(inside.x + 5, inside.y + 5);
+    await overlay.locator("textarea").fill("中の文");
+    await overlay.locator("textarea").press("Escape");
+    await expect(overlay.locator("textarea")).toBeHidden();
+    await expect(dialog).toHaveAttribute("open", "");
+    await expect(dialog).toHaveAttribute("data-cancels", "0");
+    await rmp.send(page);
+    await expect(dialog).toHaveAttribute("open", "");
+    const annotations = await rmp.annotations(await rmp.ticket()) as Array<{ comment?: string; element?: { selector?: string } }>;
+    expect(annotations.map((a) => [a.element?.selector, a.comment])).toEqual([["#inside", "中の文"]]);
+    // Closed: the bar goes back under <html>; opened again after the bar: it follows into the dialog.
+    await page.evaluate(() => (document.getElementById("d") as HTMLDialogElement).close());
+    await expect.poll(parent).toBe("HTML");
+    await page.evaluate(() => (document.getElementById("d") as HTMLDialogElement).showModal());
+    await expect.poll(parent).toBe("d");
+    expect(await reachable()).toBe("rmp-overlay-root");
+    // With nothing of ours open, Esc is the page's: its dialog closes (so the 0 above was rmp keeping it).
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveAttribute("data-cancels", "1");
+    await expect.poll(parent).toBe("HTML");
+    await page.evaluate(() => (document.getElementById("d") as HTMLDialogElement).showModal());
+    await expect.poll(parent).toBe("d");
+    // The page drops the open dialog from the document: the bar stays.
+    await page.evaluate(() => document.getElementById("d")!.remove());
+    await expect.poll(parent).toBe("HTML");
+    await overlay.locator(".rmp-modes").getByRole("button", { name: "要素", exact: true }).click({ timeout: 3_000 });
+  });
+});
+
+test("21 ダイアログの中で打った文字はダイアログに届かず、移動でコメント欄のフォーカスが外れず、後から開いた上のダイアログへ移り、背景を押して閉じても印は残る", async () => {
+  await withFixture(1, async (rmp) => {
+    rmp.setSite(modalSite);
+    const page = await rmp.open();
+    const overlay = page.locator("#rmp-overlay-root");
+    const field = overlay.locator("textarea");
+    const dialog = page.locator("#d");
+    const parent = () => page.evaluate(() => document.querySelector("#rmp-overlay-root")?.parentElement?.id || document.querySelector("#rmp-overlay-root")?.parentElement?.tagName);
+    const focused = () => page.evaluate(() => document.querySelector("#rmp-overlay-root")!.shadowRoot!.activeElement?.tagName);
+    await expect.poll(parent).toBe("d");
+    const inside = (await page.locator("#inside").boundingBox())!;
+    await page.mouse.click(inside.x + 5, inside.y + 5);
+    await field.pressSequentially("ab");
+    await expect(field).toHaveValue("ab");
+    await expect(dialog).toHaveAttribute("data-keys", "0");
+    // A dialog earlier in the document, opened later, is the one on top.
+    await page.evaluate(() => (document.getElementById("early") as HTMLDialogElement).showModal());
+    await expect.poll(parent).toBe("early");
+    expect(await focused()).toBe("TEXTAREA");
+    await page.evaluate(() => (document.getElementById("early") as HTMLDialogElement).close());
+    await expect.poll(parent).toBe("d");
+    expect(await focused()).toBe("TEXTAREA");
+    await page.keyboard.type("c");
+    await expect(field).toHaveValue("abc");
+    await field.press("Enter");
+    // In the element mode a press on the backdrop is still the page's: its dialog closes, the bar goes back, the mark stays.
+    await page.mouse.click(5, 5);
+    await expect(dialog).not.toHaveAttribute("open");
+    await expect.poll(parent).toBe("HTML");
+    await expect(overlay.locator(".rmp-mark")).toHaveCount(1);
+  });
+});
