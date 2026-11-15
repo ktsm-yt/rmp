@@ -89,6 +89,8 @@ class Overlay {
   private capturing = false;
   private tabId: number | undefined;
   private initializing: Promise<void> | undefined;
+  // The page's modal dialogs in the order they opened (the last is on top).
+  private modals: Element[] = [];
   active = false;
   private readonly drafts = new DraftDebouncer(window, async (annotations) => {
     try {
@@ -189,6 +191,26 @@ class Overlay {
     // The page is a still while the pen is on; scrolling it would slide the strokes off the picture.
     // ponytail: wheel only; arrow keys / Space can still scroll the page under the still.
     this.canvas.addEventListener("wheel", (event) => event.preventDefault(), { passive: false });
+    // Inside a dialog our presses would reach it, and a dialog that closes on a click outside its box would close on
+    // the bar (drawn outside the box). Our own handlers sit below the host or capture on document / window.
+    for (const type of ["pointerdown", "pointerup", "mousedown", "mouseup", "click"]) this.host.addEventListener(type, (event) => event.stopPropagation());
+    // childList too: a page may drop its open dialog from the document, and the bar inside with it.
+    new MutationObserver(() => this.attach()).observe(document.documentElement, { subtree: true, childList: true, attributeFilter: ["open"] });
+  }
+
+  // A dialog opened by showModal() is in the top layer and the rest of the page is inert, so no z-index gets the bar
+  // above it: the bar moves into the topmost open modal and back under <html> when it closes.
+  // ponytail: a dialog with a transform / filter moves position:fixed with it, so the bar shifts there; popovers and
+  // fullscreen are not followed.
+  private attach(): void {
+    if (!this.active) return;
+    this.modals = this.modals.filter((dialog) => dialog.matches(":modal"));
+    for (const dialog of document.querySelectorAll("dialog:modal")) if (!this.modals.includes(dialog)) this.modals.push(dialog);
+    const parent = this.modals.at(-1) ?? document.documentElement;
+    if (this.host.parentNode === parent) return;
+    parent.append(this.host);
+    // showModal / close already moved the focus (and moving the host drops it): the comment being written takes it back.
+    this.editor?.focus({ preventScroll: true });
   }
 
   private run(action: () => Promise<unknown>): void {
@@ -198,7 +220,7 @@ class Overlay {
   async activate(): Promise<void> {
     if (this.active) return;
     this.active = true;
-    document.documentElement.append(this.host);
+    this.attach();
     this.renderToolbar();
     this.resizeCanvas();
     // Back from hide(): the marks not yet sent are still here.
