@@ -809,14 +809,15 @@ test("21 ダイアログの中で打った文字はダイアログに届かず�
 test("22 PDF の要素モードは、折り返して続く行を 1 段落にまとめて印にし、見出し・次の段落・表の別の行では分ける", async () => {
   await withFixture(1, async (rmp) => {
     const page = await rmp.open();
-    // The PDF is printed from HTML by Chromium, as the documents this was made for.
+    // The PDF is printed from HTML by Chromium, as the documents this was made for. The table is indented so that
+    // only the step between its rows (not the short first row) keeps them apart.
     const paragraph = "この段落は二行以上に折り返すほどの文章です。要素モードで押すと、折り返した行も含めて段落の全体が一つの印になり、送る注釈にも段落の全文が入ることを確かめるために置いています。";
     const maker = await page.context().newPage();
     await maker.setContent(`<body style="margin:0;padding:24px;width:480px;font:14px/1.4 sans-serif">
       <h2 style="margin:0 0 12px;padding:4px 8px;background:#1e3a5f;color:#fff;font-size:16px">職務要約</h2>
       <p style="margin:0 0 4px">${paragraph}</p>
       <p style="margin:0 0 12px">次の段落は短い。</p>
-      <table style="border-collapse:collapse"><tr><td style="padding:6px 8px">2024/04</td><td style="padding:6px 8px">受託開発</td></tr>
+      <table style="margin-left:80px;border-collapse:collapse"><tr><td style="padding:6px 8px">2024/04</td><td style="padding:6px 8px">受託開発</td></tr>
       <tr><td style="padding:6px 8px">2025/01</td><td style="padding:6px 8px">保守契約</td></tr></table></body>`);
     const pdf = await maker.pdf({ width: "560px", height: "420px" });
     await maker.close();

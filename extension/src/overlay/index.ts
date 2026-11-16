@@ -346,7 +346,7 @@ class Overlay {
     const aligned = (a: PdfLine, b: PdfLine) => Math.abs(a.left - b.left) <= 1.5 * a.height && Math.abs(a.height - b.height) <= 0.2 * a.height;
     const joins = (a: PdfLine, b: PdfLine) => {
       const end = Math.max(...lines.filter((line) => aligned(a, line)).map((line) => line.right));
-      // A Latin letter is about 0.6h wide; the line's own average would count Japanese characters (1h) into it.
+      // A Latin letter is taken as 0.6h wide (an estimate, not measured); the line's own average would count Japanese characters (1h) into it.
       const word = (/^[\w'’-]+/.exec(b.text)?.[0].length ?? 0) + 1;
       return b.top - a.top < 1.7 * a.height && end - a.right < Math.max(2.5, 0.6 * word) * a.height;
     };
