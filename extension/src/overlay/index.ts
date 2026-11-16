@@ -326,25 +326,40 @@ class Overlay {
     this.renderStrokes();
   }
 
-  // PDF text comes in the fragments its maker wrote (often mid-word), so a press takes the line around it.
-  // A table row is one line too (its cells are joined by plain spaces in PDFs printed from HTML); only a gap of
-  // 3 line heights (columns) splits it. ⌘ still takes the one piece.
-  private pdfLine(target: Element | null, smallest: boolean): { rect: Rect; text: string } | null {
+  // PDF text comes in the fragments its maker wrote (often mid-word), so a press takes the paragraph around it.
+  // A line is the pieces at one height; a table row is one line too (its cells are joined by plain spaces in PDFs
+  // printed from HTML); only a gap of 3 line heights (columns) splits it. ⌘ still takes the one piece.
+  private pdfParagraph(target: Element | null, smallest: boolean): { rect: Rect; text: string } | null {
     const layer = target?.closest(".textLayer");
     if (!target || !layer || target === layer || smallest) return null;
-    const hit = target.getBoundingClientRect(), middle = hit.top + hit.height / 2;
-    const pieces = [...layer.querySelectorAll("span")].filter((span) => !span.firstElementChild).map((span) => ({ span, box: span.getBoundingClientRect() }))
-      .filter(({ box }) => box.width > 0 && box.height > 0 && box.top <= middle && middle <= box.bottom).sort((a, b) => a.box.left - b.box.left);
-    const at = pieces.findIndex(({ span }) => span === target || target.contains(span));
+    const lines = pdfLines(layer);
+    const at = lines.findIndex((line) => line.pieces.some(({ span }) => span === target || target.contains(span)));
     if (at < 0) return null;
-    let first = at, last = at;
-    const near = (a: DOMRect, b: DOMRect) => b.left - a.right < 3 * Math.max(a.height, b.height);
-    while (first > 0 && near(pieces[first - 1]!.box, pieces[first]!.box)) first -= 1;
-    while (last < pieces.length - 1 && near(pieces[last]!.box, pieces[last + 1]!.box)) last += 1;
-    const line = pieces.slice(first, last + 1);
-    const left = Math.min(...line.map(({ box }) => box.left)), top = Math.min(...line.map(({ box }) => box.top));
-    const rect = documentRect(new DOMRect(left, top, Math.max(...line.map(({ box }) => box.right)) - left, Math.max(...line.map(({ box }) => box.bottom)) - top));
-    return { rect, text: line.map(({ span }) => span.textContent ?? "").join("").replace(/\s+/g, " ").trim() };
+    // The line below continues a line when both are the same size, start at about the same x (a hanging indent
+    // of 1 line height is fine), sit close and the upper one wrapped, i.e. ran to the right end of its column.
+    // Measured on a 6-page document printed from HTML by Chromium (lines h high): wrapped lines step 1.33–1.49h, table rows
+    // 1.84h and more, so the cut is 1.7h. Wrapped lines stop at most 1.97h short of the column's end (a Japanese
+    // character that did not fit), paragraph ends 2.94h or more, so the cut is 2.5h; Latin text wraps a whole
+    // word, so its width (+ a space) counts too.
+    // ponytail: line-height above ~1.7h stays one line each, and a paragraph whose last line happens to fill the
+    // column runs into the next one; per-document statistics of the line steps if that bites.
+    const aligned = (a: PdfLine, b: PdfLine) => Math.abs(a.left - b.left) <= 1.5 * a.height && Math.abs(a.height - b.height) <= 0.2 * a.height;
+    const joins = (a: PdfLine, b: PdfLine) => {
+      const end = Math.max(...lines.filter((line) => aligned(a, line)).map((line) => line.right));
+      // A Latin letter is taken as 0.6h wide (an estimate, not measured); the line's own average would count Japanese characters (1h) into it.
+      const word = (/^[\w'’-]+/.exec(b.text)?.[0].length ?? 0) + 1;
+      return b.top - a.top < 1.7 * a.height && end - a.right < Math.max(2.5, 0.6 * word) * a.height;
+    };
+    const next = (line: PdfLine, below: boolean) => lines.filter((other) => aligned(line, other) &&
+      (below ? other.top > line.top + line.height / 2 : other.top < line.top - line.height / 2))
+      .sort((a, b) => below ? a.top - b.top : b.top - a.top)[0];
+    const block = [lines[at]!];
+    for (let line = next(block[0]!, false); line && joins(line, block[0]!); line = next(line, false)) block.unshift(line);
+    for (let line = next(block.at(-1)!, true); line && joins(block.at(-1)!, line); line = next(line, true)) block.push(line);
+    const left = Math.min(...block.map((line) => line.left)), top = block[0]!.top;
+    const rect = documentRect(new DOMRect(left, top, Math.max(...block.map((line) => line.right)) - left, block.at(-1)!.bottom - top));
+    // Japanese lines join as they are; a space goes back only between Latin words.
+    return { rect, text: block.map((line) => line.text).reduce((all, text) => all + (/[\x21-\x7e]$/.test(all) && /^[\x21-\x7e]/.test(text) ? " " : "") + text) };
   }
 
   // On a PDF page only text counts: between lines the pointer is over a layer as big as the page, which made
@@ -356,7 +371,7 @@ class Overlay {
 
   private showTargetAt(x: number, y: number, smallest: boolean): void {
     const target = this.elementAt(x, y, smallest);
-    const rect = this.pdfLine(target, smallest)?.rect ?? (target && documentRect(target.getBoundingClientRect()));
+    const rect = this.pdfParagraph(target, smallest)?.rect ?? (target && documentRect(target.getBoundingClientRect()));
     if (rect) this.showHover(rect);
     else this.hideHover();
   }
@@ -405,12 +420,12 @@ class Overlay {
     if (!target) return;
     event.preventDefault();
     event.stopImmediatePropagation();
-    const line = this.pdfLine(target, smallest);
-    if (line) {
+    const paragraph = this.pdfParagraph(target, smallest);
+    if (paragraph) {
       const same = (a: Rect, b: Rect) => [a.x - b.x, a.y - b.y, a.width - b.width, a.height - b.height].every((d) => Math.abs(d) < 1);
-      const existing = this.annotations.find((a) => a.kind === "text" && a.displayRect && same(a.displayRect, line.rect));
+      const existing = this.annotations.find((a) => a.kind === "text" && a.displayRect && same(a.displayRect, paragraph.rect));
       if (existing) this.focusMark(existing, event.shiftKey);
-      else this.add({ kind: "text", text: line.text, imageRect: line.rect, displayRect: { ...line.rect } }, event.shiftKey);
+      else this.add({ kind: "text", text: paragraph.text, imageRect: paragraph.rect, displayRect: { ...paragraph.rect } }, event.shiftKey);
       return;
     }
     // A second click on an already marked element opens that mark's comment instead of adding a duplicate.
@@ -1030,6 +1045,34 @@ class Overlay {
       }
     }
   }
+}
+
+type PdfLine = { pieces: Array<{ span: Element; box: DOMRect }>; left: number; right: number; top: number; bottom: number; height: number; text: string };
+
+// The text layer's pieces in lines: the pieces around one height, split where a gap of 3 line heights opens.
+function pdfLines(layer: Element): PdfLine[] {
+  const pieces = [...layer.querySelectorAll("span")].filter((span) => !span.firstElementChild).map((span) => ({ span, box: span.getBoundingClientRect() }))
+    .filter(({ box }) => box.width > 0 && box.height > 0).sort((a, b) => a.box.top - b.box.top);
+  const lines: PdfLine[] = [], used = new Set<Element>();
+  const line = (run: PdfLine["pieces"]): PdfLine => {
+    const boxes = run.map(({ box }) => box), top = Math.min(...boxes.map((box) => box.top));
+    return { pieces: run, left: Math.min(...boxes.map((box) => box.left)), right: Math.max(...boxes.map((box) => box.right)), top,
+      bottom: Math.max(...boxes.map((box) => box.bottom)), height: Math.max(...boxes.map((box) => box.height)),
+      text: run.map(({ span }) => span.textContent ?? "").join("").replace(/\s+/g, " ").trim() };
+  };
+  for (const seed of pieces) {
+    if (used.has(seed.span)) continue;
+    const middle = seed.box.top + seed.box.height / 2;
+    let run: PdfLine["pieces"] = [];
+    for (const piece of pieces.filter(({ span, box }) => !used.has(span) && box.top <= middle && middle <= box.bottom).sort((a, b) => a.box.left - b.box.left)) {
+      const last = run.at(-1);
+      if (last && piece.box.left - last.box.right >= 3 * Math.max(last.box.height, piece.box.height)) { lines.push(line(run)); run = []; }
+      run.push(piece);
+      used.add(piece.span);
+    }
+    lines.push(line(run));
+  }
+  return lines;
 }
 
 function rectBetween(start: Point, end: Point): Rect {
