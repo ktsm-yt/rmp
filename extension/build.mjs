@@ -23,7 +23,13 @@ if (firefox) {
     commands: { ...commands, _execute_sidebar_action: panel },
     sidebar_action: { default_panel: side_panel.default_path, default_title: "rmv", open_at_install: false },
     browser_specific_settings: {
-      gecko: { id: "red-marker-page@ktsm-yt.github.io", strict_min_version: "140.0", data_collection_permissions: { required: ["none"] } },
+      gecko: {
+        id: "red-marker-page@ktsm-yt.github.io",
+        strict_min_version: "140.0",
+        data_collection_permissions: { required: ["none"] },
+        // Self-hosted update manifest, attached to every Release by scripts/release-firefox.sh. It is baked into each signed xpi, so changing it strands installed copies.
+        update_url: "https://github.com/ktsm-yt/rmp/releases/latest/download/updates.json",
+      },
     },
   };
 }
