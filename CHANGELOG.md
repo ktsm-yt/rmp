@@ -11,7 +11,7 @@
 8. 各版の節はそのまま GitHub Release の本文になる
 
 出し方
-9. main に入れる時に、その変更の節 `## vX.Y.Z (YYYY-MM-DD)` を書き、extension/manifest.json の version を同じ数字にし、`vX.Y.Z` のタグも push する (release.yml がリリースを作る)。忘れると .githooks/pre-push が main の push を止める (clone ごとに `git config core.hooksPath .githooks` を 1 回)
+9. main に入れる時に、その変更の節 `## vX.Y.Z (YYYY-MM-DD)` を書き、extension/manifest.json の version を同じ数字にし、`vX.Y.Z` のタグも push する (release.yml がリリースを作る)。続けて `cd extension && npm run release:firefox` で Firefox 版の xpi と updates.json を同じリリースに添付する (忘れると Firefox / Zen の人は古い版のまま止まる)。忘れると .githooks/pre-push が main の push を止める (clone ごとに `git config core.hooksPath .githooks` を 1 回)
 10. 破壊的な変更 (機能を無くす、使い方が変わる、`**要対応:**` が付く) は枝のまま試し、落ち着いてから main に入れる。試して戻した変更を版に残さないため
 11. 上げる数字: 画面に新しいモードや機能のまとまりが増える、または機能を無くす時は真ん中 (0.x.0)。キーやボタン 1 つ程度の追加と、変更・修正だけなら末尾 (0.0.x)
 -->

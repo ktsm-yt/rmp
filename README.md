@@ -95,7 +95,7 @@ Firefox 140 以降 (Zen など Firefox 系を含む) は、Mozilla の署名を�
 3 は拡張の送り元を固定するためです。Firefox は送り元 (`moz-extension://<UUID>`) をプロファイルごとにランダムに決めるので、固定しないと受信箱が 403 で断ります。別の UUID を使う時は、受信箱の `RMP_INBOX_ORIGINS` に `chrome-extension://kgdkanfbaiakfcncpfdllehhenoplheg,moz-extension://<UUID>` を渡します (断った送り元は受信箱のログに出ます)。
 
 rmv は Firefox ではサイドバーに開きます (`⌘⇧,`)。キーは `about:addons` の歯車 →『拡張機能のショートカットキーを管理』で変えられます。新しい版は自動で入ります (Firefox が 1 日 1 回 Releases の `updates.json` を見に行きます。すぐ確かめる時は `about:addons` の歯車 →『更新を確認』)。
-v0.1.8 以前を入れている人は、v0.1.9 だけ 1〜2 の手順で上から入れ直してください (確かめ先は v0.1.9 から入れたので、それより前の版は自分では上がりません。3 の設定は残ります)。
+v0.1.8 以前を入れている人は、1〜2 の手順で最新の xpi を 1 回だけ上から入れ直してください (確かめ先は v0.1.9 から入れたので、それより前の版は自分では上がりません。3 の設定は残ります)。
 
 版を出す人向け: `v<版>` のタグを push した後に次を叩くと、Mozilla の非公開署名 (人の審査を待たず数分で済む) を受けて、その版の Release に `red-marker-page-<版>.xpi` と `updates.json` を添付します。AMO の API キーはキーチェーンの `amo-jwt-issuer` / `amo-jwt-secret` から読みます。
 
