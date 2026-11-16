@@ -805,3 +805,55 @@ test("21 ダイアログの中で打った文字はダイアログに届かず�
     await expect(overlay.locator(".rmp-mark")).toHaveCount(1);
   });
 });
+
+test("22 PDF の要素モードは、折り返して続く行を 1 段落にまとめて印にし、見出し・次の段落・表の別の行では分ける", async () => {
+  await withFixture(1, async (rmp) => {
+    const page = await rmp.open();
+    // The PDF is printed from HTML by Chromium, as the documents this was made for.
+    const paragraph = "この段落は二行以上に折り返すほどの文章です。要素モードで押すと、折り返した行も含めて段落の全体が一つの印になり、送る注釈にも段落の全文が入ることを確かめるために置いています。";
+    const maker = await page.context().newPage();
+    await maker.setContent(`<body style="margin:0;padding:24px;width:480px;font:14px/1.4 sans-serif">
+      <h2 style="margin:0 0 12px;padding:4px 8px;background:#1e3a5f;color:#fff;font-size:16px">職務要約</h2>
+      <p style="margin:0 0 4px">${paragraph}</p>
+      <p style="margin:0 0 12px">次の段落は短い。</p>
+      <table style="border-collapse:collapse"><tr><td style="padding:6px 8px">2024/04</td><td style="padding:6px 8px">受託開発</td></tr>
+      <tr><td style="padding:6px 8px">2025/01</td><td style="padding:6px 8px">保守契約</td></tr></table></body>`);
+    const pdf = await maker.pdf({ width: "560px", height: "420px" });
+    await maker.close();
+    const viewer = await page.context().newPage();
+    await viewer.goto(`chrome-extension://${await rmp.extensionId()}/pdfjs/web/viewer.html`);
+    await viewer.locator("#fileInput").setInputFiles({ name: "paragraph.pdf", mimeType: "application/pdf", buffer: pdf });
+    const overlay = viewer.locator("#rmp-overlay-root");
+    const first = viewer.locator(".textLayer span", { hasText: /^この段落は/ });
+    await expect(first).toHaveCount(1);
+    const line = (await first.boundingBox())!;
+    // The start of the paragraph's next line: the leftmost piece one line further down.
+    const next = await viewer.evaluate(({ top, height }) => [...document.querySelectorAll(".textLayer span")].map((span) => span.getBoundingClientRect())
+      .filter((box) => box.width > 0 && box.top > top + height / 2 && box.top < top + 2 * height).sort((a, b) => a.left - b.left)[0]!.toJSON() as DOMRect, { top: line.y, height: line.height });
+    const at = (text: RegExp) => viewer.locator(".textLayer span", { hasText: text }).first().boundingBox().then((box) => [box!.x + box!.width / 2, box!.y + box!.height / 2] as const);
+    await viewer.mouse.click(next.x + 4, next.y + next.height / 2);
+    await expect(overlay.locator(".rmp-mark")).toHaveCount(1);
+    const frame = (await overlay.locator(".rmp-frame").boundingBox())!;
+    expect(frame.height).toBeGreaterThan(2 * line.height);
+    await overlay.locator("textarea").fill("段落");
+    await overlay.locator(".rmp-state").click();
+    // The first line is the same paragraph: its mark opens again instead of a second one.
+    await viewer.mouse.click(line.x + 4, line.y + line.height / 2);
+    await expect(overlay.locator(".rmp-mark")).toHaveCount(1);
+    await expect(overlay.locator("textarea")).toHaveValue("段落");
+    await overlay.locator(".rmp-state").click();
+    for (const [text, count] of [[/^職務要約/, 2], [/^次の段落/, 3], [/^2024\/04/, 4], [/^2025\/01/, 5]] as const) {
+      await viewer.mouse.click(...await at(text));
+      await expect(overlay.locator(".rmp-mark")).toHaveCount(count);
+      await overlay.locator("textarea").fill("別");
+      // The card opens below the mark, over the next lines; saving closes it.
+      await overlay.getByRole("button", { name: "保存", exact: true }).click();
+    }
+    await viewer.mouse.move(line.x + 4, line.y + line.height / 2);
+    await rmp.screenshot(viewer, "22-pdf-paragraph");
+    await rmp.send(viewer);
+    const marks = await rmp.annotations(await rmp.ticket()) as Array<{ kind: string; text?: string }>;
+    // pdf.js gives some kanji as radicals (⼈ for 人; NFKC maps these back, not ⻑ for 長, which the text avoids).
+    expect(marks.map((mark) => mark.text?.normalize("NFKC"))).toEqual([paragraph, "職務要約", "次の段落は短い。", "2024/04 受託開発", "2025/01 保守契約"]);
+  });
+});
