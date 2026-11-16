@@ -210,6 +210,7 @@ const MANUAL_WHY: Record<string, string> = {
   unknown_session: "rmv がこの会話を知らない",
   rmv_unreachable: "rmv が動いていない",
   rmv_error: "rmv がエラーを返した",
+  inbox_deliver_error: "受信箱が herdr の pane に打ち込めなかった",
 };
 
 export function manualToast(deliver?: string): string {

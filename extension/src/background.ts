@@ -1,5 +1,5 @@
 import {
-  INBOX_BASE_URL, buildTargetList, deliverViaRmv, fetchInboxSessions, fetchTicketStatus,
+  INBOX_AFTER_RMV, INBOX_BASE_URL, buildTargetList, deliverViaInbox, deliverViaRmv, fetchInboxSessions, fetchTicketStatus,
   lastTargetAfterSend, parseLastTarget, postAnnotationsToInbox, probeRmvDeliver,
 } from "./inboxSend";
 import type { InboxSession, InboxSendResult, SessionsReply, TargetDelivery } from "./inboxSend";
@@ -12,7 +12,7 @@ export function deliveryRoute(
   session?: InboxSession,
 ): DeliveryRoute {
   if (result.delivered) return "now";
-  if (result.deliver === "rmv_timeout") return "pending";
+  if (result.deliver === "rmv_timeout" || result.deliver === "inbox_deliver_timeout") return "pending";
   // rmv's refusal describes the live terminal; don't also enqueue a hook delivery.
   if (result.deliver) return "manual";
   return session?.delivery === "next" ? "next" : "manual";
@@ -66,7 +66,7 @@ export function createBackground(api: typeof chrome, fetchImpl: typeof fetch = f
       fetchInboxSessions(url, last?.sid ?? "", { fetchImpl }),
       probeRmvDeliver({ fetchImpl }),
     ]);
-    return { reply, list: buildTargetList(reply, last, picked ?? null, extDeliver) };
+    return { reply, extDeliver, list: buildTargetList(reply, last, picked ?? null, extDeliver) };
   }
 
   async function remember(result: Pick<InboxSendResult, "reason">, to: string | null, reply: SessionsReply, noTarget: boolean) {
@@ -98,7 +98,7 @@ export function createBackground(api: typeof chrome, fetchImpl: typeof fetch = f
         return { ok: true };
       }
       case "rmp:send": {
-        const { reply, list } = await targets(raw.url, raw.picked);
+        const { reply, list, extDeliver } = await targets(raw.url, raw.picked);
         if (list.decision.action === "pick") return { kind: "pick", list };
         const to = list.decision.to;
         const result = await postAnnotationsToInbox(raw.annotations, { to, fetchImpl });
@@ -108,10 +108,16 @@ export function createBackground(api: typeof chrome, fetchImpl: typeof fetch = f
           const session = reply.available ? reply.sessions.find((s) => s.sid === to) : undefined;
           const option = list.options.find((s) => s.sid === to);
           if (option?.delivery === "now" && to && result.ticket) {
-            const delivery = await deliverViaRmv(to, result.ticket, { fetchImpl });
-            result.delivered = delivery.delivered;
-            result.deliver = delivery.reason;
-            result.via = delivery.via;
+            // rmv first, as before. The inbox types into the herdr pane itself only when rmv is not there
+            // to (not running, not opted in, does not know the session); never after rmv may have typed.
+            let delivery = extDeliver && session?.deliverable ? await deliverViaRmv(to, result.ticket, { fetchImpl }) : null;
+            if (session?.direct && (!delivery || INBOX_AFTER_RMV.has(delivery.reason)))
+              delivery = await deliverViaInbox(to, result.ticket, { fetchImpl });
+            if (delivery) {
+              result.delivered = delivery.delivered;
+              result.deliver = delivery.reason;
+              result.via = delivery.via;
+            }
           }
           return { kind: "sent", result, route: deliveryRoute(result, session) };
         }

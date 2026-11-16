@@ -124,6 +124,8 @@ export type InboxSession = {
   delivery?: TargetDelivery;
   /** rmv can type into this session's terminal (Orca / herdr, rmv says it is live). */
   deliverable?: boolean;
+  /** The inbox itself can try typing into this session's herdr pane (POST /deliver, no rmv needed). */
+  direct?: boolean;
 };
 
 export type SessionsReply =
@@ -200,6 +202,7 @@ function parseSession(raw: unknown): InboxSession | null {
     head: typeof raw.head === "string" ? raw.head : undefined,
     delivery,
     deliverable: raw.deliverable === true,
+    direct: raw.direct === true,
   };
 }
 
@@ -361,8 +364,9 @@ export function decideSendTarget(
   return { action: "send", to: last, why: guess.sid ? "same" : "last" };
 }
 
-/** extDeliver: rmv accepts /ext/deliver from this extension (probeRmvDeliver). Only then does a
- *  deliverable session show "now"; otherwise the inbox's own mark (next / manual) stays. */
+/** extDeliver: rmv accepts /ext/deliver from this extension (probeRmvDeliver). A session shows "now"
+ *  when rmv can then reach it, or when the inbox can type into its herdr pane itself (direct);
+ *  otherwise the inbox's own mark (next / manual) stays. */
 export function targetOption(
   s: InboxSession,
   last: string | null,
@@ -375,7 +379,7 @@ export function targetOption(
     folder: folderOf(s.cwd).slice(0, 80),
     cwd: s.cwd.slice(0, 1000),
     head: (s.head ?? "").replace(/\s+/g, " ").trim().slice(0, 40),
-    delivery: extDeliver && s.deliverable ? "now" : (s.delivery ?? "manual"),
+    delivery: (extDeliver && s.deliverable) || s.direct ? "now" : (s.delivery ?? "manual"),
     reason,
     guess: isGuess(s),
     last: s.sid === last,
@@ -434,20 +438,51 @@ export type RmvDeliverReason =
    *  when the caller goes away), so this is "not known", not "not typed": no clipboard copy now. */
   | "rmv_timeout"
   /** Anything else (400, 502, a malformed reply). */
-  | "rmv_error";
+  | "rmv_error"
+  /** The inbox's own POST /deliver (herdr pane, rmv not used) got no answer in time: it may still type. */
+  | "inbox_deliver_timeout"
+  /** The inbox's own POST /deliver failed otherwise (unreachable, 403, 404, 502, a malformed reply). */
+  | "inbox_deliver_error";
+
+/** rmv did not type and never will for this ticket: the inbox may try its herdr pane itself.
+ *  Not rmv_timeout (rmv may still type it) nor rmv's 409s (the inbox's checks would say the same). */
+export const INBOX_AFTER_RMV: ReadonlySet<RmvDeliverReason> = new Set([
+  "rmv_unreachable",
+  "not_enabled",
+  "unknown_session",
+]);
+
+type DeliverOptions = { fetchImpl?: typeof fetch; timeoutMs?: number; base?: string };
+type DeliverResult = { delivered: boolean; reason: RmvDeliverReason; via?: string };
 
 /** POST /ext/deliver {sid, ticket}. Never throws. */
-export async function deliverViaRmv(
+export function deliverViaRmv(sid: unknown, ticket: unknown, options: DeliverOptions = {}): Promise<DeliverResult> {
+  return postDeliver(`${options.base ?? RMV_BASE_URL}/ext/deliver`, sid, ticket, options.timeoutMs ?? 8000, options.fetchImpl);
+}
+
+/** POST /deliver {sid, ticket} to the inbox: it types into the session's herdr pane itself after the same
+ *  checks as rmv, and answers 409 with the same first words. Its checks end within 5 s; 10 s leaves typing room. */
+export async function deliverViaInbox(sid: unknown, ticket: unknown, options: DeliverOptions = {}): Promise<DeliverResult> {
+  const result = await postDeliver(`${options.base ?? INBOX_BASE_URL}/deliver`, sid, ticket, options.timeoutMs ?? 10_000, options.fetchImpl);
+  if (result.reason === "rmv_timeout") return { delivered: false, reason: "inbox_deliver_timeout" };
+  if (["rmv_unreachable", "rmv_error", "not_enabled", "unknown_session"].includes(result.reason))
+    return { delivered: false, reason: "inbox_deliver_error" };
+  return result;
+}
+
+async function postDeliver(
+  url: string,
   sid: unknown,
   ticket: unknown,
-  options: { fetchImpl?: typeof fetch; timeoutMs?: number; base?: string } = {},
-): Promise<{ delivered: boolean; reason: RmvDeliverReason; via?: string }> {
+  timeoutMs: number,
+  fetchImpl: typeof fetch = fetch,
+): Promise<DeliverResult> {
   if (!isSessionId(sid) || !isTicket(ticket)) return { delivered: false, reason: "rmv_error" };
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 8000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await (options.fetchImpl ?? fetch)(
-      `${options.base ?? RMV_BASE_URL}/ext/deliver`,
+    const response = await fetchImpl(
+      url,
       {
         method: "POST",
         headers: { "content-type": "application/json" },

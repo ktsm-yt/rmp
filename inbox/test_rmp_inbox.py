@@ -26,6 +26,7 @@ SCRIPT = Path(__file__).resolve().parent / "rmp-inbox.py"
 ORIGIN = "chrome-extension://kgdkanfbaiakfcncpfdllehhenoplheg"
 ME = "11111111-1111-4111-8111-111111111111"
 A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 
 
 def spare_port():
@@ -47,6 +48,13 @@ def lstart(pid):
         env={**os.environ, "LC_ALL": "C", "TZ": "UTC"},
     ).stdout
     return " ".join(out.split())
+
+
+# python under the name "claude". Homebrew's python3 re-executes Python.app (the command line would show that),
+# so link the binary that actually runs.
+_APP = Path(sys.base_prefix) / "Resources" / "Python.app" / "Contents" / "MacOS" / "Python"
+CLAUDE = str(Path(tempfile.mkdtemp(prefix="rmp-claude-bin-")) / "claude")
+os.symlink(_APP if _APP.exists() else sys.executable, CLAUDE)
 
 
 def dead_pid():
@@ -73,8 +81,11 @@ class Base(unittest.TestCase):
             p.kill()
             p.wait()
 
-    def sleeper(self):
-        p = subprocess.Popen(["/bin/sleep", "600"])
+    def sleeper(self, env=None, args=()):
+        # A process in a herdr pane plays a Claude: its command is "claude" (the inbox counts Claude processes by
+        # name, as rmv does) and ps -E must show its environment, which a platform binary like /bin/sleep hides.
+        cmd = ["/bin/sleep", "600"] if env is None else [CLAUDE, "-c", "import time; time.sleep(600)", *args]
+        p = subprocess.Popen(cmd, env=env)
         self.procs.append(p)
         for _ in range(50):
             if lstart(p.pid):
@@ -542,8 +553,8 @@ class Hooks(Base):
         self.assertFalse((self.root / "sessions").exists() and any((self.root / "sessions").iterdir()))
 
 
-class SessionsList(Base):
-    """GET /sessions with the registry laid over ~/.claude/sessions."""
+class Served(Base):
+    """A resident inbox on a spare port."""
 
     def setUp(self):
         super().setUp()
@@ -570,6 +581,11 @@ class SessionsList(Base):
         with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/sessions?url={q}") as r:
             body = json.loads(r.read())
         return {s["sid"]: s for s in body["sessions"]}, body
+
+
+
+class SessionsList(Served):
+    """GET /sessions with the registry laid over ~/.claude/sessions."""
 
     def test_registered_session_is_next_and_others_manual(self):
         self.session(self.sleeper(), A)
@@ -971,6 +987,255 @@ class Server(unittest.TestCase):
     def test_other_origin_is_refused(self):
         code, _ = self.post("/done", SEND, origin="https://example.com")
         self.assertEqual(code, 403)
+
+
+# A stand-in for the herdr CLI: answers from files in its folder and logs every call (argv + socket).
+FAKE_HERDR = r"""
+import json, os, sys
+d = os.path.dirname(os.path.abspath(__file__))
+args = sys.argv[1:]
+with open(os.path.join(d, "calls.jsonl"), "a") as f:
+    f.write(json.dumps({"args": args, "sock": os.environ.get("HERDR_SOCKET_PATH")}) + "\n")
+name = {"list": "list", "get": "get", "read": "read", "send-text": "send", "send-keys": "send"}.get(args[1] if len(args) > 1 else "", "other")
+try:
+    code = int(open(os.path.join(d, name + ".code")).read())
+except OSError:
+    code = 0
+try:
+    sys.stdout.write(open(os.path.join(d, name + ".out"), encoding="utf-8").read())
+except OSError:
+    pass
+sys.exit(code)
+"""
+SOCK = "/tmp/rmp-test-herdr/herdr.sock"
+PANE = "w1:p1"
+EMPTY_BOX = "out\n────\n❯ \n────\n  status\n"
+
+
+class Deliver(Served):
+    """POST /deliver: type /rmp <ticket> into the herdr pane of the target's Claude, without rmv."""
+
+    def setUp(self):
+        self.herdr_dir = Path(tempfile.mkdtemp(prefix="rmp-fake-herdr-"))
+        bin_ = self.herdr_dir / "herdr"
+        bin_.write_text(f"#!{sys.executable}\n{FAKE_HERDR}")
+        bin_.chmod(0o755)
+        self.answer("get", json.dumps({"result": {"pane": {"pane_id": PANE, "agent": "claude", "agent_status": "idle"}}}))
+        self.answer("read", EMPTY_BOX)
+        self.answer("list", json.dumps({"result": {"panes": [{"pane_id": PANE, "agent": "claude", "label": "依頼1"}]}}))
+        super().setUp()
+        self.target = self.sleeper(self.in_pane())
+        self.session(self.target, A, status="idle")
+
+    def env(self, **extra):
+        return super().env(**{"RMP_HERDR_BIN": str(self.herdr_dir / "herdr"), **extra})
+
+    def in_pane(self, pane=PANE, sock=SOCK):
+        return {**os.environ, "HERDR_ENV": "1", "HERDR_PANE_ID": pane, "HERDR_SOCKET_PATH": sock}
+
+    def answer(self, name, out=None, code=0):
+        if out is not None:
+            (self.herdr_dir / f"{name}.out").write_text(out, encoding="utf-8")
+        (self.herdr_dir / f"{name}.code").write_text(str(code))
+
+    def calls(self):
+        path = self.herdr_dir / "calls.jsonl"
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+    def typed(self):
+        return [c["args"] for c in self.calls() if c["args"][1] in ("send-text", "send-keys")]
+
+    def deliver(self, sid=A, ticket=None, origin=ORIGIN, body=None):
+        raw = json.dumps(body if body is not None else {"sid": sid, "ticket": ticket}).encode()
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/deliver", data=raw, method="POST",
+                                     headers={"Origin": origin, "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req) as r:
+                return r.status, r.read().decode()
+        except urllib.error.HTTPError as e:
+            with e:
+                return e.code, e.read().decode()
+
+    def test_all_checks_pass_types_the_ticket_then_enter_into_that_pane(self):
+        ticket = self.put(A)
+        code, body = self.deliver(ticket=ticket)
+        self.assertEqual((code, json.loads(body)), (200, {"ok": True, "via": "herdr"}))
+        self.assertEqual(self.typed(), [["pane", "send-text", PANE, f"/rmp {ticket}"], ["pane", "send-keys", PANE, "enter"]])
+        self.assertEqual({c["sock"] for c in self.calls()}, {SOCK})
+        self.assertFalse(self.is_read(ticket))  # typing only cues the session; /rmp reads it
+
+    def test_the_same_ticket_is_typed_once(self):
+        ticket = self.put(A)
+        self.assertEqual(self.deliver(ticket=ticket)[0], 200)
+        code, body = self.deliver(ticket=ticket)
+        self.assertEqual((code, body.split(":")[0]), (409, "already"))
+        self.assertEqual(len(self.typed()), 2)
+
+    def test_a_failed_send_text_sends_no_enter_and_is_not_retried(self):
+        ticket = self.put(A)
+        self.answer("send", code=1)
+        self.assertEqual(self.deliver(ticket=ticket)[0], 502)
+        self.assertEqual([a[1] for a in self.typed()], ["send-text"])
+        self.answer("send", code=0)
+        self.assertEqual(self.deliver(ticket=ticket)[0], 409)
+        self.assertEqual(len(self.typed()), 1)
+
+    def assertRefused(self, word, sid=A):
+        code, body = self.deliver(sid=sid, ticket=self.put(sid))
+        self.assertEqual(code, 409, body)
+        self.assertTrue(body.startswith(word), body)
+        self.assertEqual(self.typed(), [])
+
+    # 1. the pane's conversation is the target's
+    def test_another_conversation_in_the_pane_is_stale(self):
+        self.session(self.sleeper(self.in_pane()), ME)  # e.g. a second Claude in the pane runs ME
+        self.assertRefused("stale")
+
+    def test_the_same_pane_id_in_another_herdr_session_is_not_mixed_up(self):
+        self.session(self.sleeper(self.in_pane(sock="/tmp/other/herdr.sock")), ME)
+        self.assertEqual(self.deliver(ticket=self.put(A))[0], 200)
+
+    def test_a_headless_child_with_the_panes_environment_does_not_count(self):
+        # Seen on a real Mac: `claude -p` started from the pane's Claude inherits HERDR_PANE_ID and its <pid>.json
+        # says "interactive" too. Counting it made every send to the pane's own conversation "stale".
+        self.session(self.sleeper(self.in_pane(), args=["-p", "--output-format", "stream-json"]), B)
+        self.assertEqual(self.deliver(ticket=self.put(A))[0], 200)
+
+    def test_a_headless_target_is_not_live_and_not_offered(self):
+        self.session(self.sleeper(self.in_pane(), args=["-p"]), B)
+        got, _ = self.listing()
+        self.assertIs(got[A]["direct"], True)
+        self.assertIs(got[B]["direct"], False)  # listed as before (its file says interactive), but not "now"
+        self.assertNotIn("label", got[B])
+        self.assertRefused("not live", sid=B)
+
+    def test_a_claude_in_the_pane_without_a_session_file_is_unverified(self):
+        self.sleeper(self.in_pane())  # e.g. another CLAUDE_CONFIG_DIR: its conversation cannot be told
+        self.assertRefused("unverified")
+
+    def test_a_session_file_of_unknown_shape_in_the_pane_is_unverified(self):
+        self.session(self.sleeper(self.in_pane()), ME, kind=None)
+        self.assertRefused("unverified")
+
+    def test_an_unreadable_session_file_is_unverified(self):
+        (self.sessions / "999999.json").write_text("{half")
+        self.assertRefused("unverified")
+
+    def test_a_conversation_switched_away_is_not_live(self):
+        self.session(self.target, ME)  # /clear in the pane: its Claude's file now names ME, nobody runs A
+        self.assertRefused("not live")
+
+    def test_a_target_outside_herdr_is_not_live(self):
+        self.session(self.target, ME)
+        self.session(self.me_pid, A)  # A now runs in a Claude outside herdr
+        self.assertRefused("not live")
+
+    # 2. the pane is there and Claude runs in it
+    def test_a_pane_without_claude_is_not_live(self):
+        self.answer("get", json.dumps({"result": {"pane": {"pane_id": PANE, "agent_status": "unknown"}}}))
+        self.assertRefused("not live")
+
+    def test_a_closed_pane_is_not_live(self):
+        self.answer("get", "", code=1)
+        self.assertRefused("not live")
+
+    def test_herdr_answering_garbage_is_unverified(self):
+        self.answer("get", "not json")
+        self.assertRefused("unverified")
+
+    def test_herdr_missing_is_unverified(self):
+        (self.herdr_dir / "herdr").unlink()
+        self.assertRefused("unverified")
+
+    # 3. no permission / question dialog
+    def test_herdr_blocked_is_permission_pending(self):
+        self.answer("get", json.dumps({"result": {"pane": {"pane_id": PANE, "agent": "claude", "agent_status": "blocked"}}}))
+        self.assertRefused("permission")
+
+    def test_a_waiting_session_file_is_permission_pending(self):
+        self.session(self.target, A, status="waiting", waitingFor="permission prompt")
+        self.assertRefused("permission")
+
+    def test_no_agent_status_is_unverified(self):
+        self.answer("get", json.dumps({"result": {"pane": {"pane_id": PANE, "agent": "claude"}}}))
+        self.assertRefused("unverified")
+
+    # 4. the input box is empty
+    def test_half_typed_text_is_draft(self):
+        self.answer("read", "out\n────\n❯ この文を直して\n────\n  status\n")
+        self.assertRefused("draft")
+
+    def test_an_unreadable_screen_is_unverified(self):
+        self.answer("read", "", code=1)
+        self.assertRefused("unverified")
+
+    def test_a_screen_without_the_input_box_is_unverified(self):
+        self.answer("read", "Do you want to proceed?\n 1. Yes\n")
+        self.assertRefused("unverified")
+
+    # what may be typed at all
+    def test_only_an_unread_ticket_for_that_sid(self):
+        self.assertEqual(self.deliver(ticket=self.put(ME))[0], 404)  # another session's
+        self.assertEqual(self.deliver(ticket=self.put())[0], 404)  # untargeted
+        self.assertEqual(self.deliver(ticket="20261023-120000-999999")[0], 404)  # missing
+        ticket = self.put(A)
+        self.read("--ticket", ticket)
+        self.assertEqual(self.deliver(ticket=ticket)[0], 404)  # already read
+        self.assertEqual(self.typed(), [])
+
+    def test_bad_requests_are_refused_before_anything_runs(self):
+        ticket = self.put(A)
+        self.assertEqual(self.deliver(ticket=ticket, origin="https://example.com")[0], 403)
+        self.assertEqual(self.deliver(body={"sid": A, "ticket": ticket, "text": "rm -rf /"})[0], 400)
+        self.assertEqual(self.deliver(body={"sid": A, "ticket": "; echo hi"})[0], 400)
+        self.assertEqual(self.deliver(body={"sid": "w1:p1", "ticket": ticket})[0], 400)
+        self.assertEqual(self.calls(), [])
+
+    def test_an_environment_that_is_not_utf8_breaks_neither_the_list_nor_delivery(self):
+        # Found on a real Mac: one Claude's environment held bytes that are not UTF-8, and GET /sessions crashed.
+        env = {k.encode(): v.encode() for k, v in self.in_pane().items()}
+        env[b"BROKEN"] = b"\xe5x"
+        self.session(self.sleeper(env), ME)
+        got, _ = self.listing()
+        self.assertEqual(set(got), {ME, A})
+        self.assertIs(got[A]["direct"], True)
+        self.assertRefused("stale")  # ME's Claude is in the same pane; its environment was still read
+
+    # GET /sessions
+    def test_the_list_shows_the_pane_name_and_direct_without_rmv(self):
+        got, _ = self.listing()
+        self.assertEqual((got[A]["label"], got[A]["direct"], got[A]["deliverable"]), ("依頼1", True, False))
+        self.assertIs(got[ME]["direct"], False)  # not in herdr
+        self.assertNotIn("label", got[ME])
+
+    def test_a_pane_without_claude_is_not_direct(self):
+        self.answer("list", json.dumps({"result": {"panes": [{"pane_id": PANE, "label": "shell"}]}}))
+        got, _ = self.listing()
+        self.assertIs(got[A]["direct"], False)
+        self.assertNotIn("label", got[A])
+
+
+class ScreenParsing(unittest.TestCase):
+    """The input-box reading copied from rmv (draftOnScreen / dropDim), on rmv's own test screens."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location("rmp_inbox", SCRIPT)
+        cls.m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.m)
+
+    def draft(self, screen):
+        return self.m.draft_on_screen([self.m.drop_dim(line) for line in screen.split("\n")])
+
+    def test_rmv_screens(self):
+        self.assertIs(self.draft(EMPTY_BOX), False)
+        self.assertIs(self.draft("out\n────\n❯ この文を直して\n────\n  status\n"), True)
+        self.assertIs(self.draft("out\n─── History 3/9 ──────\n❯ 前に送った依頼\n  2 行目\n────\n  status\n"), True)
+        # the faint `Try "…"` example in a new conversation's box is not a draft
+        self.assertIs(self.draft('out\n────\n\x1b[0m\x1b[38;2;153;153;153m❯ \x1b[0m\x1b[2mTry "write a test for <filepath>"\x1b[22m\n────\n  status\n'), False)
+        # coloured (38;2;…) ordinary text is a draft: the 2 in it is not "faint"
+        self.assertIs(self.draft("out\n────\n\x1b[0m\x1b[38;2;153;153;153m❯ \x1b[0m\x1b[38;2;255;255;255mこの文を直して\x1b[0m\n────\n  status\n"), True)
+        self.assertIsNone(self.draft("no box here\n"))
 
 
 if __name__ == "__main__":
