@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test, type Page } from "@playwright/test";
@@ -856,5 +856,48 @@ test("22 PDF の要素モードは、折り返して続く行を 1 段落にま�
     const marks = await rmp.annotations(await rmp.ticket()) as Array<{ kind: string; text?: string }>;
     // pdf.js gives some kanji as radicals (⼈ for 人; NFKC maps these back, not ⻑ for 長, which the text avoids).
     expect(marks.map((mark) => mark.text?.normalize("NFKC"))).toEqual([paragraph, "職務要約", "次の段落は短い。", "2024/04 受託開発", "2025/01 保守契約"]);
+  });
+});
+
+test("22 コメント欄が開いている時に文字キーが欄の外へ届くか、なぞった直後にページから焦点が抜けると、焦点の記録を下書きの注釈に付ける", async () => {
+  await withFixture(1, async (rmp) => {
+    const page = await rmp.open();
+    const overlay = page.locator("#rmp-overlay-root");
+    const field = overlay.locator("textarea");
+    const tabId = await rmp.tabId(page);
+    const logs = async () => {
+      try {
+        const draft = JSON.parse(await readFile(join(rmp.inboxRoot, "drafts", `${tabId}.json`), "utf8")) as { annotations: { focusLog?: string[] }[] };
+        return draft.annotations.map((a) => a.focusLog?.join("\n") ?? "");
+      } catch { return []; }
+    };
+    await page.mouse.click(460, 225);
+    // Keys that reach the comment leave no record.
+    await page.keyboard.type("ab");
+    await expect(field).toHaveValue("ab");
+    await expect.poll(logs).toEqual([""]);
+    // The card stays open but the focus is gone, as the user saw: the next character key is recorded once.
+    await field.evaluate((element) => element.blur());
+    await page.keyboard.type("cd");
+    await expect(overlay.locator(".rmp-toast")).toContainText("焦点の記録を取りました");
+    await expect.poll(async () => (await logs())[0]).toContain("文字キーがコメント欄の外に届いた");
+    const first = (await logs())[0]!;
+    expect(first).toContain("key 文字キー → body");
+    expect(first.match(/コメント欄の外に届いた/g)).toHaveLength(1);
+    await page.keyboard.press("Escape");
+    // A text drag, then the page itself loses the focus (to a side panel, the address bar).
+    const line = await page.evaluate(() => {
+      const range = document.createRange();
+      range.selectNodeContents(document.querySelector("main")!.firstChild!);
+      const box = range.getBoundingClientRect();
+      return { left: box.left, right: box.right, middle: box.top + box.height / 2 };
+    });
+    await page.mouse.move(line.left + 2, line.middle);
+    await page.mouse.down();
+    await page.mouse.move((line.left + line.right) / 2, line.middle, { steps: 5 });
+    await page.mouse.up();
+    await expect(field).toBeFocused();
+    await page.evaluate(() => dispatchEvent(new Event("blur")));
+    await expect.poll(async () => (await logs()).at(-1)).toContain("なぞった直後にページから焦点が抜けた");
   });
 });
