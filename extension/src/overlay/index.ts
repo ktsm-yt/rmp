@@ -91,6 +91,12 @@ class Overlay {
   private initializing: Promise<void> | undefined;
   // The page's modal dialogs in the order they opened (the last is on top).
   private modals: Element[] = [];
+  // ponytail: a probe for "the comment opened after a text drag but the keys did not reach it" (not reproduced in
+  // headless runs). The last 40 focus / pointer / key events, element names only (never the typed text); when a
+  // character key misses the open comment, they ride on its mark to the inbox draft. Take out once the cause is known.
+  private trail: string[] = [];
+  private traced = false;
+  private textOpenedAt = -Infinity;
   active = false;
   private readonly drafts = new DraftDebouncer(window, async (annotations) => {
     try {
@@ -180,6 +186,13 @@ class Overlay {
     document.addEventListener("mouseup", (event) => this.onUp(event), true);
     document.addEventListener("keydown", (event) => this.onKey(event), true);
     document.addEventListener("keyup", (event) => this.onCommandKey(event, false), true);
+    for (const type of ["focusin", "focusout", "mousedown", "mouseup", "click"]) document.addEventListener(type, (event) => this.trace(type, event), true);
+    addEventListener("focus", () => this.trace("window focus"));
+    // Keys typed outside the page never reach it, so the page losing the focus right after a text drag is kept too.
+    addEventListener("blur", () => {
+      this.trace("window blur");
+      if (performance.now() - this.textOpenedAt < 2000) this.traceStray("なぞった直後にページから焦点が抜けた");
+    });
     addEventListener("scroll", () => {
       if (this.active) { this.hideHover(); this.renderMarks(); this.renderStrokes(); }
     }, true);
@@ -447,6 +460,7 @@ class Overlay {
     // Nothing got selected (the page forbids it): the drag falls back to a range.
     if (this.mode === "element" && dragStart && selecting && this.addSelection(event.shiftKey)) {
       this.dragged = true;
+      this.textOpenedAt = performance.now();
       this.hideHover();
     } else if (this.mode === "element" && dragStart) {
       this.dragged = true;
@@ -484,6 +498,10 @@ class Overlay {
     this.onCommandKey(event, true);
     const target = event.composedPath()[0];
     const inComment = target === this.editor;
+    this.trace(`key ${event.key.length === 1 ? "文字キー" : event.key}`, event);
+    if (this.editor && !inComment && event.key.length === 1 && !event.metaKey && !event.ctrlKey && !this.isOurs(event)) {
+      this.traceStray("文字キーがコメント欄の外に届いた");
+    }
     const editing = target instanceof HTMLElement && !this.isOurs(event) &&
       (target.isContentEditable || target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement);
     const action = keyAction({ key: event.key, metaKey: event.metaKey, ctrlKey: event.ctrlKey, shiftKey: event.shiftKey,
@@ -608,6 +626,7 @@ class Overlay {
     // Out of the shadow root the target is our host, not a field, so page shortcuts (GitHub's j / k) would take the key.
     for (const type of ["keydown", "keypress", "keyup"]) field.addEventListener(type, (event) => event.stopPropagation());
     this.editor = field;
+    this.traced = false;
     this.card = card;
     this.cardMoved = false;
     this.draggable(card, () => { this.cardMoved = true; });
@@ -912,6 +931,29 @@ class Overlay {
   private async copyText(text: string, success: string, fallback?: HTMLElement): Promise<void> {
     try { await navigator.clipboard.writeText(text); fallback?.remove(); this.toast(success); }
     catch { if (!fallback) this.toast(`手で: ${text}`, text); }
+  }
+
+  private trace(what: string, event?: Event): void {
+    if (!this.active) return;
+    const name = (node: EventTarget | null | undefined) => node instanceof Element
+      ? `${node.tagName.toLowerCase()}${node.id ? `#${node.id}` : ""}${typeof node.className === "string" && node.className.trim() ? `.${node.className.trim().split(/\s+/).join(".")}` : ""}`
+      : node === window ? "window" : String(node);
+    const chain: string[] = [];
+    for (let active = document.activeElement; active; active = active.shadowRoot?.activeElement ?? null) chain.push(name(active));
+    const at = event ? ` → ${name(event.composedPath()[0])}` : "";
+    this.trail = [...this.trail.slice(-39), `${Math.round(performance.now())} ${what}${at} | 焦点 ${chain.join(" > ")}${document.hasFocus() ? "" : " (ページ外)"}`];
+  }
+
+  // Once per opened comment: the trail goes on its marks, and the draft carries it to the inbox.
+  private traceStray(reason: string): void {
+    if (this.traced || !this.editor) return;
+    this.traced = true;
+    this.trace(`${reason} (選択 ${getSelection()?.rangeCount ?? 0} 件)`);
+    for (const annotation of this.annotations) {
+      if (this.selected.includes(annotation.displayNumber)) Object.assign(annotation, { focusLog: this.trail });
+    }
+    this.drafts.schedule(this.annotations);
+    this.toast("焦点の記録を取りました");
   }
 
   private toast(text: string, copy?: string): void {
