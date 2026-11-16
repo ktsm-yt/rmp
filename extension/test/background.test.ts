@@ -161,3 +161,72 @@ describe("stored-send delivery integration", () => {
     expect(api.storage.local.set).not.toHaveBeenCalled();
   });
 });
+
+describe("rmv first, then the inbox's own herdr delivery", () => {
+  const request = { type: "rmp:send", url: "https://example.com", picked: { sid }, annotations: [{ kind: "dom", displayNumber: 1 }] };
+  // rmv: "off" = not running / "on" = opted in, answering /ext/deliver with status + body
+  function run(rmv: "off" | { status: number; body: string } | "hang", session: Record<string, unknown>, inbox = { status: 200, body: '{"ok":true,"via":"herdr"}' }) {
+    const { background, fetchImpl } = fixture();
+    const calls: string[] = [];
+    fetchImpl.mockImplementation(async (url, init) => {
+      if (url.includes("/sessions?")) return new Response(JSON.stringify({ sessions: [{ sid, delivery: "next", ...session }] }));
+      if (url.endsWith("/done")) return new Response(JSON.stringify({ ticket: "20261025-223344-123456" }));
+      if (url.endsWith("/ext/deliver")) {
+        if (rmv === "off") throw new TypeError("Failed to fetch");
+        if (init?.body === "{}") return new Response("", { status: 400 });
+        calls.push("rmv");
+        if (rmv === "hang") return new Promise((_r, reject) => init?.signal?.addEventListener("abort", () => reject(new Error("abort"))));
+        return new Response(rmv.body, { status: rmv.status });
+      }
+      if (url.endsWith("/deliver")) { calls.push("inbox"); return new Response(inbox.body, { status: inbox.status }); }
+      return new Response("{}");
+    });
+    return { pending: background.handle(request, sender), calls };
+  }
+
+  it("rmv not running: the inbox types into the herdr pane", async () => {
+    const { pending, calls } = run("off", { direct: true });
+    expect(await pending).toMatchObject({ route: "now", result: { delivered: true, deliver: "delivered", via: "herdr" } });
+    expect(calls).toEqual(["inbox"]);
+  });
+
+  it("rmv running and able to reach it: only rmv types", async () => {
+    const { pending, calls } = run({ status: 200, body: '{"ok":true,"via":"herdr"}' }, { direct: true, deliverable: true });
+    expect(await pending).toMatchObject({ route: "now", result: { delivered: true } });
+    expect(calls).toEqual(["rmv"]);
+  });
+
+  it.each([
+    ["stale", "stale"], ["permission pending", "permission_pending"], ["draft", "draft"], ["unverified", "unverified"], ["not live", "not_live"],
+  ])("rmv's 409 %s goes to 手で without asking the inbox", async (body, deliver) => {
+    const { pending, calls } = run({ status: 409, body }, { direct: true, deliverable: true });
+    expect(await pending).toMatchObject({ route: "manual", result: { delivered: false, deliver } });
+    expect(calls).toEqual(["rmv"]);
+  });
+
+  it("rmv's timeout is pending and never handed to the inbox (rmv may still type it)", async () => {
+    vi.useFakeTimers();
+    const { pending, calls } = run("hang", { direct: true, deliverable: true });
+    await vi.advanceTimersByTimeAsync(8000);
+    expect(await pending).toMatchObject({ route: "pending", result: { deliver: "rmv_timeout" } });
+    expect(calls).toEqual(["rmv"]);
+  });
+
+  it("rmv does not know the session (404): the inbox tries", async () => {
+    const { pending, calls } = run({ status: 404, body: "unknown session" }, { direct: true, deliverable: true });
+    expect(await pending).toMatchObject({ route: "now", result: { delivered: true } });
+    expect(calls).toEqual(["rmv", "inbox"]);
+  });
+
+  it("the inbox refusing (draft) falls back to 手で", async () => {
+    const { pending, calls } = run("off", { direct: true }, { status: 409, body: "draft: 宛先の入力欄に書きかけがある" });
+    expect(await pending).toMatchObject({ route: "manual", result: { delivered: false, deliver: "draft" } });
+    expect(calls).toEqual(["inbox"]);
+  });
+
+  it("not direct and rmv off: nobody types", async () => {
+    const { pending, calls } = run("off", { direct: false });
+    expect(await pending).toMatchObject({ route: "next", result: { delivered: false } });
+    expect(calls).toEqual([]);
+  });
+});

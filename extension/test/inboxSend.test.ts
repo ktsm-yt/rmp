@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildTargetList,
   decideSendTarget,
+  deliverViaInbox,
   deliverViaRmv,
   fetchInboxSessions,
   fetchTicketStatus,
@@ -168,6 +169,7 @@ describe("fetchInboxSessions", () => {
           head: undefined,
           delivery: undefined,
           deliverable: false,
+          direct: false,
         },
       ],
       default: A,
@@ -639,5 +641,54 @@ describe("rmv /ext/deliver (今すぐ)", () => {
     expect(marks(true)).toEqual(["now", "next", "manual"]);
     expect(marks(false)).toEqual(["next", "next", "manual"]);
     expect(buildTargetList(result, null, null).options[0]?.delivery).toBe("next");
+  });
+});
+
+describe("inbox POST /deliver (今すぐ without rmv, herdr pane)", () => {
+  const T = "20261023-071713-735053";
+
+  it("sends only {sid, ticket} to the inbox", async () => {
+    const fetchImpl = vi.fn(async () => reply(200, { ok: true, via: "herdr" }));
+    expect(await deliverViaInbox(SID, T, { fetchImpl })).toEqual({ delivered: true, reason: "delivered", via: "herdr" });
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(`${INBOX_BASE_URL}/deliver`);
+    expect(JSON.parse(String(init.body))).toEqual({ sid: SID, ticket: T });
+  });
+
+  it("reads the inbox's refusals with rmv's words, and its own failures as the inbox's", async () => {
+    const cases: [Response | Error, string][] = [
+      [new Response("stale: この pane では別の会話が開かれている", { status: 409 }), "stale"],
+      [new Response("permission pending: 宛先の Claude が許可か入力を待っている", { status: 409 }), "permission_pending"],
+      [new Response("draft: 宛先の入力欄に書きかけがある", { status: 409 }), "draft"],
+      [new Response("unverified: herdr を呼べない", { status: 409 }), "unverified"],
+      [new Response("not live: herdr pane w1:p1 に Claude が居ない", { status: 409 }), "not_live"],
+      [new Response("unknown ticket", { status: 404 }), "inbox_deliver_error"],
+      [new Response("", { status: 403 }), "inbox_deliver_error"],
+      [new Response("herdr send-text failed", { status: 502 }), "inbox_deliver_error"],
+      [new TypeError("Failed to fetch"), "inbox_deliver_error"],
+    ];
+    for (const [answer, reason] of cases) {
+      const fetchImpl = vi.fn(async () => {
+        if (answer instanceof Error) throw answer;
+        return answer;
+      });
+      expect(await deliverViaInbox(SID, T, { fetchImpl })).toEqual({ delivered: false, reason });
+    }
+  });
+
+  it("a cut wait is pending: the inbox may still type it", async () => {
+    const fetchImpl = vi.fn(
+      (_url: string | URL | Request, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(new Error("aborted")))),
+    );
+    expect(await deliverViaInbox(SID, T, { fetchImpl, timeoutMs: 10 })).toEqual({ delivered: false, reason: "inbox_deliver_timeout" });
+  });
+
+  it("marks a direct session 今すぐ even when rmv is off", async () => {
+    const fetchImpl = vi.fn(async () =>
+      reply(200, { sessions: [{ sid: SID, cwd: "/a", updatedAt: 1, match: null, delivery: "next", direct: true }], default: null, defaultReason: null }),
+    );
+    const result = await fetchInboxSessions("file:///a/x.html", "", { fetchImpl });
+    expect(buildTargetList(result, null, null, false).options[0]?.delivery).toBe("now");
   });
 });

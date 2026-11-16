@@ -19,6 +19,9 @@ HTTP (127.0.0.1 only, extension origin only):
   POST /done      body: annotation array -> 200 {ticket, where}
   POST /draft     body: {tabId, url, title, annotations} -> 200 {tabId}
   POST /status    body: {"ticket": T}    -> 200 {ticket, status: new|read|missing}
+  POST /deliver   body: {sid, ticket}    -> 200 {ok, via: "herdr"} after typing `/rmp T` + Enter into the
+                  herdr pane of sid's Claude (without rmv); 409 "<word>: why" when a check fails (check_pane),
+                  404 when T is not unread in new/<sid>/. Each ticket is typed at most once.
   GET  /sessions?url=<tab url>[&last=<sid>] -> live Claude sessions + a guess at the target
 
 Hooks read the hook JSON on stdin (session_id, cwd) and keep a registry
@@ -28,6 +31,8 @@ When rmv (127.0.0.1:4310) is running, GET /sessions lays its own GET /sessions o
 label (herdr pane name), head (first 40 chars of the latest reply) and deliverable
 (rmv can reach its terminal). rmv only adds to sessions already listed here, never adds a session,
 and is given 0.6 s: when it is stopped or slow the list is the same as without it (deliverable false).
+Without rmv's label, a session whose Claude runs in a herdr pane gets that pane's name, and "direct"
+says the inbox can try typing into the pane itself (POST /deliver), so the extension offers "now".
 hook-prompt only mentions unread sends in new/<sid>/ ("あなた宛ての赤ペン N 件: /rmp <ticket>", plus a
 note not to read them until the user types /rmp) and never marks them read. A hook exits 0 and prints nothing else once Python runs it. That alone does
 not keep a prompt unblocked: `python3 <missing file>` exits 2, which blocks a UserPromptSubmit
@@ -37,7 +42,8 @@ Only the Red Marker Page extension origins may talk to it: any web page can reac
 lands here is read into Claude's context, so a page must not be able to forge annotations.
 
 Environment (tests): RMP_INBOX_PORT, RMP_INBOX_ROOT, RMP_CLAUDE_SESSIONS, RMP_INBOX_NO_NOTIFY=1,
-RMP_RMV_URL (rmv's base URL, default http://127.0.0.1:4310), RMP_INBOX_ORIGINS (comma-separated
+RMP_RMV_URL (rmv's base URL, default http://127.0.0.1:4310), RMP_HERDR_BIN (herdr, default
+/opt/homebrew/bin/herdr), RMP_INBOX_ORIGINS (comma-separated
 extension origins, overriding the two built-in extension IDs).
 Keep this file runnable by the macOS system python3 (3.9).
 """
@@ -545,6 +551,237 @@ def rmv_sessions_within(seconds):
     return result
 
 
+# ---------- herdr panes (direct delivery without rmv) ----------
+# The checks below are copied from rmv's server.ts (extCheck / checkHerdrPane / inputDraft / draftOnScreen /
+# dropDim), made stricter where rmv lets a send through: anything that cannot be read stops the send.
+# A change in herdr's CLI or Claude Code's input box needs fixing here and in rmv; until then it only
+# turns "now" into "manual", never into a send to the wrong place.
+
+HERDR_BIN = os.environ.get("RMP_HERDR_BIN") or "/opt/homebrew/bin/herdr"  # launchd's PATH has no /opt/homebrew/bin
+HERDR_PANE_RE = re.compile(r"^[A-Za-z0-9][\w:.-]*$")  # a leading "-" would turn into a flag
+HERDR_TIMEOUT = 1.5
+HERDR_LIST_TIMEOUT = 0.4  # GET /sessions: the extension waits 0.8 s for the whole list
+DELIVERED = ROOT / "delivered"  # delivered/<ticket>: claimed before typing, so a ticket is typed once
+DELIVER_BUDGET = 5.0  # the extension waits 10 s; the checks must be over before that, typing included
+_DELIVER_LOCK = threading.Lock()  # ponytail: one delivery at a time; per-pane locks if that ever queues up
+
+
+def _env_value(command, key):
+    m = re.search(rf"(?:^|\s){key}=(\S+)", command)
+    return m.group(1) if m else None
+
+
+def _proc_commands(pids):
+    """{pid: `ps -E` line (command + environment)} for the pids still running; None when ps fails."""
+    if not pids:
+        return {}
+    try:
+        # errors="replace": another process's environment may hold bytes that are not UTF-8
+        out = subprocess.run(["/bin/ps", "-Eww", "-o", "pid=,command=", "-p", ",".join(str(p) for p in pids)],
+                             capture_output=True, text=True, errors="replace", check=False, timeout=HERDR_TIMEOUT).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    found = {}
+    for line in out.splitlines():
+        m = re.match(r"^\s*(\d+)\s+(.*)$", line)
+        if m:
+            found[int(m.group(1))] = m.group(2)
+    return found
+
+
+def herdr_place(command):
+    """(pane, socket) of a Claude started inside herdr, or None. Both must be well-formed: the socket
+    picks the herdr session (named sessions number their panes from w1:p1 again)."""
+    if not command or _env_value(command, "HERDR_ENV") != "1":
+        return None
+    pane, sock = _env_value(command, "HERDR_PANE_ID"), _env_value(command, "HERDR_SOCKET_PATH")
+    if not pane or not HERDR_PANE_RE.match(pane) or not sock or not sock.startswith("/"):
+        return None
+    return pane, sock
+
+
+def herdr(args, sock, timeout=HERDR_TIMEOUT):
+    """(exit code, stdout) of one herdr command aimed at sock, or None when it cannot run."""
+    try:
+        r = subprocess.run([HERDR_BIN, *args], capture_output=True, text=True, errors="replace", check=False,
+                           timeout=timeout, env={**os.environ, "HERDR_SOCKET_PATH": sock})
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.returncode, r.stdout
+
+
+def herdr_overlay(sessions):
+    """{sid: {label, direct}} for listed sessions whose Claude runs in a herdr pane with Claude in it.
+    direct is only "the inbox may try"; /deliver checks everything again right before typing.
+    One ps and one `herdr pane list` per socket; anything that fails leaves the session out."""
+    commands = _proc_commands([s["pid"] for s in sessions.values() if s.get("pid")]) or {}
+    places = {sid: herdr_place(commands.get(s.get("pid"))) for sid, s in sessions.items()}
+    panes = {}
+    for sock in {p[1] for p in places.values() if p}:
+        r = herdr(["pane", "list"], sock, HERDR_LIST_TIMEOUT)
+        try:
+            items = json.loads(r[1])["result"]["panes"] if r and r[0] == 0 else []
+        except (ValueError, KeyError, TypeError):
+            items = []
+        for item in items if isinstance(items, list) else []:
+            if isinstance(item, dict) and isinstance(item.get("pane_id"), str):
+                panes[(item["pane_id"], sock)] = item
+    out = {}
+    for sid, place in places.items():
+        item = panes.get(place) if place else None
+        if item and item.get("agent") == "claude":
+            label = item.get("label")
+            out[sid] = {"label": label[:200] if isinstance(label, str) else "", "direct": True}
+    return out
+
+
+def drop_dim(line):
+    """One `herdr pane read --format ansi` line without its faint (SGR 2) text and escape sequences.
+    The 2 inside a colour (38;2;r;g;b) is not faint. Same as rmv's dropDim."""
+    dim, out = False, []
+    pattern = r"\x1b\[([0-9;:]*)m|\x1b\[[0-9;:?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|([^\x1b]+)"
+    for m in re.finditer(pattern, line):
+        if m.group(2) is not None:
+            if not dim:
+                out.append(m.group(2))
+            continue
+        if m.group(1) is None:
+            continue
+        ps = re.split(r"[;:]", m.group(1))
+        i = 0
+        while i < len(ps):
+            p = ps[i]
+            if p in ("", "0", "22"):
+                dim = False
+            elif p == "2":
+                dim = True
+            elif p in ("38", "48", "58"):
+                nxt = ps[i + 1] if i + 1 < len(ps) else None
+                i += 2 if nxt == "5" else 4 if nxt == "2" else 0
+            i += 1
+    return "".join(out)
+
+
+def draft_on_screen(lines):
+    """Claude Code's input box = between the last two rules (lines starting with ───), its first line
+    starting with ❯ (older versions >). True = something typed / False = empty / None = no box found.
+    ponytail: reads the screen's look; a new input box shape gives None (do not type). Same as rmv's draftOnScreen."""
+    rules = [i for i, line in enumerate(lines) if re.match(r"^\s*─{3}", line)]
+    if len(rules) < 2:
+        return None
+    box = lines[rules[-2] + 1:rules[-1]]
+    if not box or not re.match(r"^\s*[❯>]", box[0]):
+        return None
+    return re.sub(r"\s", "", re.sub(r"^\s*[❯>]", "", "".join(box))) != ""
+
+
+class Refuse(Exception):
+    """409 whose text starts with the word the extension reads (the same words as rmv's /ext/deliver)."""
+
+
+def check_pane(sid):
+    """(pane, socket) to type /rmp into, after the same checks as rmv's extCheck. Raises Refuse otherwise:
+      not live    no live interactive Claude runs sid, or it is not in a herdr pane with Claude in it
+      stale       a Claude in that pane runs another conversation (/clear, /resume before the next prompt)
+      permission  a permission / question dialog is open (the ticket's first digit would pick an option)
+      draft       the input box holds half-typed text (it and /rmp would go out as one prompt)
+      unverified  ps, a session file, herdr or the screen could not be read
+    rmv also reads its own permission files; the inbox has none and relies on herdr's agent_status and
+    the session file's status instead, and refuses when either cannot be read (rmv lets those through)."""
+    procs = _process_table()
+    if os.getpid() not in procs:
+        raise Refuse("unverified: ps が失敗し、宛先の会話を確かめられない")
+    try:
+        files = _session_files()
+    except OSError:
+        raise Refuse("unverified: Claude のセッションの記録を読めない")
+    if any(data is None for _, data in files):
+        raise Refuse("unverified: 読めないセッションの記録がある (宛先のものかもしれない)")
+    states = [(data, *_file_state(f, data, procs)) for f, data in files]
+    alive = [(data, file_sid, pid, state) for data, file_sid, pid, state in states if state not in ("dead", "reused")]
+    target = [pid for _, file_sid, pid, state in alive if file_sid == sid and state == "live"]
+    if len(target) != 1:
+        raise Refuse("not live: 宛先の会話を動かしている Claude が見つからない")
+    commands = _proc_commands([pid for _, _, pid, _ in alive])
+    if commands is None:
+        raise Refuse("unverified: ps が失敗し、宛先の pane を確かめられない")
+    place = herdr_place(commands.get(target[0]))
+    if not place:
+        raise Refuse("not live: 宛先の Claude は herdr の pane の中にいない")
+    for data, file_sid, pid, state in alive:
+        if herdr_place(commands.get(pid)) != place:
+            continue
+        if data.get("kind") not in (None, "interactive"):
+            continue  # claude -p started from that pane's Claude: it has no input box there
+        if state != "live":
+            raise Refuse(f"unverified: pane の Claude (pid {pid}) の記録の形が分からない")
+        if file_sid != sid:
+            raise Refuse("stale: この pane では別の会話が開かれている")
+        if data.get("status") == "waiting":
+            raise Refuse("permission pending: 宛先の Claude が許可か入力を待っている")
+    pane, sock = place
+    r = herdr(["pane", "get", pane], sock)
+    if r is None:
+        raise Refuse("unverified: herdr を呼べない")
+    try:
+        info = json.loads(r[1])["result"]["pane"] if r[0] == 0 else None
+    except (ValueError, KeyError, TypeError):
+        raise Refuse("unverified: herdr の pane の情報を読めない")
+    if not isinstance(info, dict):
+        raise Refuse(f"not live: herdr pane {pane} が無い")
+    if info.get("agent") != "claude":
+        raise Refuse(f"not live: herdr pane {pane} に Claude が居ない")  # a bare shell would run /rmp as a command
+    status = info.get("agent_status")
+    if not isinstance(status, str):
+        raise Refuse("unverified: herdr pane の状態を読めない")
+    if status == "blocked":
+        raise Refuse("permission pending: 宛先の Claude が許可か入力を待っている")
+    r = herdr(["pane", "read", pane, "--source", "visible", "--format", "ansi"], sock)
+    draft = draft_on_screen([drop_dim(line) for line in r[1].split("\n")]) if r and r[0] == 0 else None
+    if draft is None:
+        raise Refuse("unverified: 宛先の入力欄を読めず、書きかけがあるか確かめられない")
+    if draft:
+        raise Refuse("draft: 宛先の入力欄に書きかけがある")
+    return pane, sock
+
+
+def deliver(sid, ticket):
+    """(status, text) for POST /deliver: type `/rmp <ticket>` + Enter into sid's herdr pane.
+    Only a ticket that sits unread in new/<sid>/ is typed, and each ticket at most once (delivered/<ticket>
+    is created before typing and never removed, so a failed send is not retried either)."""
+    started = time.monotonic()
+    status, path = find_ticket(ticket)
+    if status != "new" or path != NEW / sid / f"{ticket}.json":
+        return 404, "unknown ticket: その会話宛ての未読の注釈ではない"
+    with _DELIVER_LOCK:
+        if (DELIVERED / ticket).exists():
+            return 409, "already: この注釈はもう打ち込んだ"
+        try:
+            pane, sock = check_pane(sid)
+        except Refuse as why:
+            return 409, str(why)
+        except Exception:  # noqa: BLE001 - a check that broke is a check that did not pass
+            return 409, "unverified: 確かめの途中で失敗した"
+        # The extension stops waiting after 10 s and falls back to "manual": typing after that sends the cue twice.
+        if time.monotonic() - started > DELIVER_BUDGET:
+            return 409, "unverified: 確かめに時間がかかりすぎた"
+        DELIVERED.mkdir(parents=True, exist_ok=True)
+        try:
+            os.close(os.open(DELIVERED / ticket, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+        except FileExistsError:
+            return 409, "already: この注釈はもう打ち込んだ"
+        # How rmv types into herdr (server.ts herdrSend): the text with send-text and Enter as a key with
+        # send-keys, sent apart. No `--` before the text: herdr would type the `--` too, and text starting
+        # with "-h" is not taken as a flag (measured by rmv 2026-10-13). Enter only after the text went in.
+        r = herdr(["pane", "send-text", pane, f"/rmp {ticket}"], sock)
+        if not r or r[0] != 0:
+            return 502, "herdr send-text failed"
+        r = herdr(["pane", "send-keys", pane, "enter"], sock)
+        if not r or r[0] != 0:
+            return 502, "herdr send-keys failed"
+        return 200, None
+
+
 def sessions_for(url, last=""):
     rmv = rmv_sessions_within(RMV_TIMEOUT)
     procs = _process_table()
@@ -580,6 +817,10 @@ def sessions_for(url, last=""):
             rank = 1.5
         return (rank, -match.get(sid, {}).get("length", 0), -(s["updatedAt"] or 0))
 
+    try:
+        panes = herdr_overlay(sessions)  # runs while rmv's answer is on its way
+    except Exception:  # noqa: BLE001 - the list must come back even when the herdr lookup breaks
+        panes = {}
     over = rmv()
     items = []
     for s in sorted(sessions.values(), key=order):
@@ -589,7 +830,11 @@ def sessions_for(url, last=""):
         for key in ("label", "head"):
             if extra.get(key):
                 item[key] = extra[key]
+        pane = panes.get(s["sid"], {})
+        if pane.get("label") and "label" not in item:
+            item["label"] = pane["label"]  # the herdr pane name, as rmv shows it
         item["deliverable"] = bool(extra.get("deliverable"))
+        item["direct"] = bool(pane.get("direct"))  # the inbox itself may type into its herdr pane (POST /deliver)
         items.append({**item, "match": match.get(s["sid"]), "last": s["sid"] == last})
     return {"sessions": items, "default": default, "defaultReason": default_reason}
 
@@ -690,6 +935,16 @@ class Handler(BaseHTTPRequestHandler):
         if body:
             self.wfile.write(body)
 
+    def _text(self, code, text):
+        """A refusal the extension tells apart by its first word (see check_pane)."""
+        body = text.encode()
+        self.send_response(code)
+        self._cors()
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def _cors(self):
         # Firefox applies CORS to extension fetches despite host permissions (measured 2026-10-30, Zen:
         # status 200 but the body blocked). Only allowed origins get the header, so web pages still cannot read.
@@ -699,7 +954,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         """Preflight for Firefox: X-RMP-To on /done is not a simple header."""
-        if urlsplit(self.path).path not in ("/sessions", "/done", "/draft", "/status") or not self._allowed():
+        if urlsplit(self.path).path not in ("/sessions", "/done", "/draft", "/status", "/deliver") or not self._allowed():
             self._reply(403)
             return
         self.send_response(204)
@@ -742,7 +997,7 @@ class Handler(BaseHTTPRequestHandler):
         self._reply(200, sessions_for(url, last if UUID_RE.match(last) else ""))
 
     def do_POST(self):
-        if self.path not in ("/done", "/draft", "/status") or not self._allowed():
+        if self.path not in ("/done", "/draft", "/status", "/deliver") or not self._allowed():
             self._reply(403)
             return
         raw = self._body(MAX_BODY if self.path in ("/done", "/draft") else 4096)
@@ -753,6 +1008,19 @@ class Handler(BaseHTTPRequestHandler):
             payload = json.loads(raw)
         except ValueError:
             self._reply(400)
+            return
+        if self.path == "/deliver":
+            # Only {sid, ticket}: the text typed is built here from the ticket, never taken from the request.
+            ok = isinstance(payload, dict) and set(payload) == {"sid", "ticket"}
+            sid, ticket = (payload.get("sid"), payload.get("ticket")) if ok else (None, None)
+            if not isinstance(sid, str) or not UUID_RE.match(sid) or not isinstance(ticket, str) or not TICKET_RE.match(ticket):
+                self._reply(400)
+                return
+            code, text = deliver(sid, ticket)
+            if code == 200:
+                self._reply(200, {"ok": True, "via": "herdr"})
+            else:
+                self._text(code, text)
             return
         if self.path == "/status":
             ticket = payload.get("ticket") if isinstance(payload, dict) else None
