@@ -589,6 +589,34 @@ def _proc_commands(pids):
     return found
 
 
+# rmv's claudeProcs: Claude processes are told apart by their command line. A headless `claude -p` started from a
+# pane's Claude (Bash tool, workflows) inherits the pane's environment and writes a <pid>.json that also says
+# "interactive", but it has no input box in that pane.
+HEADLESS_RE = re.compile(r"daemon|bg-pty-host|bg-spare|(?:^|\s)(?:-p|--print)(?:\s|$)")
+
+
+def claude_panes():
+    """{pid: (pane, socket) or None} for every interactive Claude process (the command is claude, not headless);
+    None when ps fails. The command line comes from plain ps: in `ps -E` it runs into the environment."""
+    try:
+        out = subprocess.run(["/bin/ps", "-axo", "pid=,command="], capture_output=True, text=True, errors="replace",
+                             check=False, timeout=HERDR_TIMEOUT).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    pids, seen = [], set()
+    for line in out.splitlines():
+        m = re.match(r"^\s*(\d+)\s+(\S+)(.*)$", line)
+        if not m:
+            continue
+        seen.add(int(m.group(1)))
+        if os.path.basename(m.group(2)) == "claude" and not HEADLESS_RE.search(m.group(3)):
+            pids.append(int(m.group(1)))
+    commands = _proc_commands(pids)
+    if commands is None or os.getpid() not in seen:  # ps that does not list this process did not work
+        return None
+    return {pid: herdr_place(commands[pid]) for pid in pids if pid in commands}
+
+
 def herdr_place(command):
     """(pane, socket) of a Claude started inside herdr, or None. Both must be well-formed: the socket
     picks the herdr session (named sessions number their panes from w1:p1 again)."""
@@ -614,8 +642,8 @@ def herdr_overlay(sessions):
     """{sid: {label, direct}} for listed sessions whose Claude runs in a herdr pane with Claude in it.
     direct is only "the inbox may try"; /deliver checks everything again right before typing.
     One ps and one `herdr pane list` per socket; anything that fails leaves the session out."""
-    commands = _proc_commands([s["pid"] for s in sessions.values() if s.get("pid")]) or {}
-    places = {sid: herdr_place(commands.get(s.get("pid"))) for sid, s in sessions.items()}
+    claude = claude_panes() or {}
+    places = {sid: claude.get(s.get("pid")) for sid, s in sessions.items()}
     panes = {}
     for sock in {p[1] for p in places.values() if p}:
         r = herdr(["pane", "list"], sock, HERDR_LIST_TIMEOUT)
@@ -697,24 +725,28 @@ def check_pane(sid):
         raise Refuse("unverified: Claude のセッションの記録を読めない")
     if any(data is None for _, data in files):
         raise Refuse("unverified: 読めないセッションの記録がある (宛先のものかもしれない)")
-    states = [(data, *_file_state(f, data, procs)) for f, data in files]
-    alive = [(data, file_sid, pid, state) for data, file_sid, pid, state in states if state not in ("dead", "reused")]
-    target = [pid for _, file_sid, pid, state in alive if file_sid == sid and state == "live"]
+    records = {}  # pid -> (data, sid, state) for the session files of running processes
+    for f, data in files:
+        file_sid, pid, state = _file_state(f, data, procs)
+        if state not in ("dead", "reused"):
+            records[pid] = (data, file_sid, state)
+    target = [pid for pid, (_, file_sid, state) in records.items() if file_sid == sid and state == "live"]
     if len(target) != 1:
         raise Refuse("not live: 宛先の会話を動かしている Claude が見つからない")
-    commands = _proc_commands([pid for _, _, pid, _ in alive])
-    if commands is None:
+    claude = claude_panes()
+    if claude is None:
         raise Refuse("unverified: ps が失敗し、宛先の pane を確かめられない")
-    place = herdr_place(commands.get(target[0]))
+    if target[0] not in claude:
+        raise Refuse("not live: 宛先の会話は入力欄のある Claude で動いていない (claude -p など)")
+    place = claude[target[0]]
     if not place:
         raise Refuse("not live: 宛先の Claude は herdr の pane の中にいない")
-    for data, file_sid, pid, state in alive:
-        if herdr_place(commands.get(pid)) != place:
+    for pid, where in claude.items():
+        if where != place:
             continue
-        if data.get("kind") not in (None, "interactive"):
-            continue  # claude -p started from that pane's Claude: it has no input box there
+        data, file_sid, state = records.get(pid, ({}, "", "missing"))
         if state != "live":
-            raise Refuse(f"unverified: pane の Claude (pid {pid}) の記録の形が分からない")
+            raise Refuse(f"unverified: pane の Claude (pid {pid}) の記録を読めない")
         if file_sid != sid:
             raise Refuse("stale: この pane では別の会話が開かれている")
         if data.get("status") == "waiting":

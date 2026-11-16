@@ -26,6 +26,7 @@ SCRIPT = Path(__file__).resolve().parent / "rmp-inbox.py"
 ORIGIN = "chrome-extension://kgdkanfbaiakfcncpfdllehhenoplheg"
 ME = "11111111-1111-4111-8111-111111111111"
 A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 
 
 def spare_port():
@@ -47,6 +48,13 @@ def lstart(pid):
         env={**os.environ, "LC_ALL": "C", "TZ": "UTC"},
     ).stdout
     return " ".join(out.split())
+
+
+# python under the name "claude". Homebrew's python3 re-executes Python.app (the command line would show that),
+# so link the binary that actually runs.
+_APP = Path(sys.base_prefix) / "Resources" / "Python.app" / "Contents" / "MacOS" / "Python"
+CLAUDE = str(Path(tempfile.mkdtemp(prefix="rmp-claude-bin-")) / "claude")
+os.symlink(_APP if _APP.exists() else sys.executable, CLAUDE)
 
 
 def dead_pid():
@@ -73,9 +81,10 @@ class Base(unittest.TestCase):
             p.kill()
             p.wait()
 
-    def sleeper(self, env=None):
-        # ps -E does not show a platform binary's (/bin/sleep) environment: herdr panes need python
-        cmd = ["/bin/sleep", "600"] if env is None else [sys.executable, "-c", "import time; time.sleep(600)"]
+    def sleeper(self, env=None, args=()):
+        # A process in a herdr pane plays a Claude: its command is "claude" (the inbox counts Claude processes by
+        # name, as rmv does) and ps -E must show its environment, which a platform binary like /bin/sleep hides.
+        cmd = ["/bin/sleep", "600"] if env is None else [CLAUDE, "-c", "import time; time.sleep(600)", *args]
         p = subprocess.Popen(cmd, env=env)
         self.procs.append(p)
         for _ in range(50):
@@ -1071,8 +1080,8 @@ class Deliver(Served):
         self.assertEqual(self.deliver(ticket=ticket)[0], 409)
         self.assertEqual(len(self.typed()), 1)
 
-    def assertRefused(self, word, ticket=None):
-        code, body = self.deliver(ticket=ticket or self.put(A))
+    def assertRefused(self, word, sid=A):
+        code, body = self.deliver(sid=sid, ticket=self.put(sid))
         self.assertEqual(code, 409, body)
         self.assertTrue(body.startswith(word), body)
         self.assertEqual(self.typed(), [])
@@ -1086,10 +1095,23 @@ class Deliver(Served):
         self.session(self.sleeper(self.in_pane(sock="/tmp/other/herdr.sock")), ME)
         self.assertEqual(self.deliver(ticket=self.put(A))[0], 200)
 
-    def test_a_headless_claude_in_the_pane_does_not_count(self):
-        printed = self.sleeper(self.in_pane())
-        self.session(printed, ME, kind="print")
+    def test_a_headless_child_with_the_panes_environment_does_not_count(self):
+        # Seen on a real Mac: `claude -p` started from the pane's Claude inherits HERDR_PANE_ID and its <pid>.json
+        # says "interactive" too. Counting it made every send to the pane's own conversation "stale".
+        self.session(self.sleeper(self.in_pane(), args=["-p", "--output-format", "stream-json"]), B)
         self.assertEqual(self.deliver(ticket=self.put(A))[0], 200)
+
+    def test_a_headless_target_is_not_live_and_not_offered(self):
+        self.session(self.sleeper(self.in_pane(), args=["-p"]), B)
+        got, _ = self.listing()
+        self.assertIs(got[A]["direct"], True)
+        self.assertIs(got[B]["direct"], False)  # listed as before (its file says interactive), but not "now"
+        self.assertNotIn("label", got[B])
+        self.assertRefused("not live", sid=B)
+
+    def test_a_claude_in_the_pane_without_a_session_file_is_unverified(self):
+        self.sleeper(self.in_pane())  # e.g. another CLAUDE_CONFIG_DIR: its conversation cannot be told
+        self.assertRefused("unverified")
 
     def test_a_session_file_of_unknown_shape_in_the_pane_is_unverified(self):
         self.session(self.sleeper(self.in_pane()), ME, kind=None)
