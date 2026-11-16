@@ -236,6 +236,19 @@ class Inbox(Base):
         self.assertFalse(self.is_read(t))
         self.assertIn("他のセッション宛て 1 件", out)
 
+    def test_send_for_a_running_headless_session_waits_until_it_exits(self):
+        # GET /sessions does not offer a `claude -p`, but while it runs read must not count it as ended.
+        pid = self.sleeper()
+        self.session(pid, A, entrypoint="sdk-cli")
+        t = self.put(A)
+        out = self.read("--session", ME)
+        self.assertFalse(self.is_read(t))
+        self.assertIn("他のセッション宛て 1 件", out)
+        (self.sessions / f"{pid}.json").unlink()  # Claude deletes <pid>.json on exit
+        out = self.read("--session", ME)
+        self.assertTrue(self.is_read(t))
+        self.assertIn("は終了済み", out)
+
     def test_own_send_is_read(self):
         t = self.put(ME)
         self.read("--session", ME)
@@ -621,6 +634,26 @@ class SessionsList(Served):
         got, _ = self.listing()
         self.assertEqual((got[b]["cwd"], got[b]["delivery"]), ("/w/only", "next"))
         self.assertEqual(set(got), {ME, b})
+
+    def test_a_headless_claude_outside_herdr_is_not_listed(self):
+        # 2026-11-16: a `claude -p` that a SessionEnd hook ran in /tmp showed up as a target. Its file says
+        # "interactive" too; entrypoint "sdk-cli" tells it apart. It runs outside herdr (no HERDR_*).
+        env = {k: v for k, v in os.environ.items() if not k.startswith("HERDR_")}
+        self.session(self.sleeper(env, args=["-p", "--resume", A]), A, entrypoint="sdk-cli")
+        self.session(self.sleeper(), B, entrypoint="cli")
+        got, _ = self.listing()
+        self.assertEqual(set(got), {ME, B})
+
+    def test_a_headless_claude_is_not_listed_through_the_registry_either(self):
+        # Hooks run in `claude -p` too and register its pid; the registry must not bring it back.
+        pid = self.sleeper()
+        self.session(pid, A, entrypoint="sdk-cli")
+        self.register(A, pid)
+        odd = self.sleeper()
+        self.session(odd, B, entrypoint="sdk-cli", procStart="2026-10-22T05:00:00.000Z")  # (b) cannot tell
+        self.register(B, odd)
+        got, _ = self.listing()
+        self.assertEqual(set(got), {ME})
 
     def test_one_process_two_sids_lists_the_one_its_hook_reported_last(self):
         # ~/.claude/sessions still names ME for the process, the hook says it is A now (/clear).
@@ -1102,11 +1135,10 @@ class Deliver(Served):
         self.assertEqual(self.deliver(ticket=self.put(A))[0], 200)
 
     def test_a_headless_target_is_not_live_and_not_offered(self):
-        self.session(self.sleeper(self.in_pane(), args=["-p"]), B)
+        self.session(self.sleeper(self.in_pane(), args=["-p"]), B, entrypoint="sdk-cli")
         got, _ = self.listing()
         self.assertIs(got[A]["direct"], True)
-        self.assertIs(got[B]["direct"], False)  # listed as before (its file says interactive), but not "now"
-        self.assertNotIn("label", got[B])
+        self.assertNotIn(B, got)  # its file says interactive, but it has no input box to deliver to
         self.assertRefused("not live", sid=B)
 
     def test_a_claude_in_the_pane_without_a_session_file_is_unverified(self):

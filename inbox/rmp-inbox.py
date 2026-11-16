@@ -27,6 +27,7 @@ HTTP (127.0.0.1 only, extension origin only):
 Hooks read the hook JSON on stdin (session_id, cwd) and keep a registry
 ~/.rmp-inbox/sessions/<sid>.json. GET /sessions lists a registered session with delivery "next"
 (its next prompt mentions the send), any other with "manual" (the user pastes /rmp <ticket>).
+A headless `claude -p` is not listed: it has no input box to deliver to.
 When rmv (127.0.0.1:4310) is running, GET /sessions lays its own GET /sessions over that list:
 label (herdr pane name), head (first 40 chars of the latest reply) and deliverable
 (rmv can reach its terminal). rmv only adds to sessions already listed here, never adds a session,
@@ -225,7 +226,8 @@ def ended_targets(sids, me=""):
       - a sid that no file names counts as ended (Claude deletes <pid>.json on exit) unless some
         file with a live pid has no readable sessionId: that file may be the target's.
     The hooks' registry is laid over this with the same rule GET /sessions lists by
-    (session_view), so a sid the list offers is never ended here: a listed sid is live, and a sid
+    (session_view), so a sid the list offers is never ended here: a listed sid is live (a running
+    headless `claude -p` is not listed, yet its (b) file keeps it from counting as ended), and a sid
     whose registered process is still running is unsure unless that process has clearly moved on
     to another sid (its (b) file and its latest hook both name the other one).
     """
@@ -309,8 +311,11 @@ def session_view(procs, files=None):
       process has ended, others "manual",
     - a registered pid that is alive (pid + the ps start time the hook wrote) is listed even when
       its (b) file cannot vouch for it (procStart reformatted, sessionId missing), but only while
-      that file exists and says kind "interactive": hooks also run in `claude -p` and other
-      headless processes, which must not show up as targets,
+      that file exists and says kind "interactive",
+    - a headless `claude -p` (its file says entrypoint "sdk-cli"; foyer's `claude -p --resume` too) is
+      never listed, from the file or from the registry: its file says kind "interactive" as well, but
+      it has no input box, and RMP joins the browser to Claude windows. read still counts it as alive
+      while it runs (ended_targets): a send to it stays unread until the process exits,
     - when one Claude process shows up under two sids, the sid its hook reported last wins: the
       hooks run on every SessionStart (/clear, /resume) and prompt, so they follow the conversation.
     Each item carries "cwds" (the (b) cwd and the hook's cwd) for the cwd guess.
@@ -325,8 +330,11 @@ def session_view(procs, files=None):
         except OSError:
             files = []
     from_files = _live_from(files, procs)
+    # ponytail: entrypoint is not a public format; if Claude renames it, headless sessions show up again
+    # (as before this check). Then fall back to HEADLESS_RE on the plain ps command line, as claude_panes does.
+    headless = {int(f.stem) for f, data in files if isinstance(data, dict) and data.get("entrypoint") == "sdk-cli"}
     sessions = {sid: {**s, "cwds": [s["cwd"]] if s["cwd"] else [], "delivery": "manual"}
-                for sid, s in from_files.items()}
+                for sid, s in from_files.items() if s["pid"] not in headless}
     entries = registry_entries()
     by_sid = {}
     for e in entries:
@@ -337,7 +345,7 @@ def session_view(procs, files=None):
     for e in alive:
         if e["updatedAt"] >= latest_by_pid.get(e["pid"], {"updatedAt": -1})["updatedAt"]:
             latest_by_pid[e["pid"]] = e
-    interactive = {int(f.stem) for f, data in files if isinstance(data, dict) and data.get("kind") == "interactive"}
+    interactive = {int(f.stem) for f, data in files if isinstance(data, dict) and data.get("kind") == "interactive"} - headless
     sid_by_pid = {s["pid"]: sid for sid, s in sessions.items()}
     for pid, e in latest_by_pid.items():
         old = sid_by_pid.get(pid)
@@ -591,7 +599,8 @@ def _proc_commands(pids):
 
 # rmv's claudeProcs: Claude processes are told apart by their command line. A headless `claude -p` started from a
 # pane's Claude (Bash tool, workflows) inherits the pane's environment and writes a <pid>.json that also says
-# "interactive", but it has no input box in that pane.
+# "interactive", but it has no input box in that pane. GET /sessions leaves these out by the file's entrypoint
+# (session_view); this command-line check is what keeps them from being typed into.
 HEADLESS_RE = re.compile(r"daemon|bg-pty-host|bg-spare|(?:^|\s)(?:-p|--print)(?:\s|$)")
 
 
