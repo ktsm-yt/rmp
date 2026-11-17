@@ -911,29 +911,47 @@ test("24 送ると部品一覧が付き、point の番号に赤枠が出てそ�
       response.end(`<title>設定</title><main style="margin:80px;width:420px;height:160px">実際の注釈対象です</main>
         <h2>アカウント</h2><a href="#profile">プロフィール</a>
         <label>パスワード <input type="password" value="秘密の値"></label>
+        <label>メモ <textarea>秘密のメモ</textarea></label><label>色 <select><option>選んだ色</option></select></label>
+        <input type="submit" value="送信する" onclick="return false">
         <button style="display:none">隠れた部品</button><button aria-label="閉じる">×</button>
         <div style="height:2400px"></div>
-        <h2>通知の設定</h2><button id="save" onclick="document.body.dataset.saved='yes'">通知を保存</button>`);
+        <h2>通知の設定</h2><button id="save" onclick="document.body.dataset.saved=Number(document.body.dataset.saved||0)+1">通知を保存</button>`);
     });
     const page = await rmp.open();
     const overlay = page.locator("#rmp-overlay-root");
     await dragRange(page);
     await overlay.locator("textarea").fill("通知の設定どこ?");
     await rmp.send(page);
+    // The side panel the send opened narrows what a capture sees; close it so the capture below shows the frame's place.
+    await rmp.closeSidePanel();
     const ticket = await rmp.ticket();
     const [first] = await rmp.annotations(ticket) as Array<{ parts: { n: number; kind: string; text: string }[]; partsTotal: number }>;
     expect(first.parts).toEqual([
       { n: 1, kind: "h2", text: "アカウント" }, { n: 2, kind: "link", text: "プロフィール" },
-      { n: 3, kind: "input:password", text: "パスワード" }, { n: 4, kind: "button", text: "×" },
-      { n: 5, kind: "h2", text: "通知の設定" }, { n: 6, kind: "button", text: "通知を保存" },
+      { n: 3, kind: "input:password", text: "パスワード" }, { n: 4, kind: "textarea", text: "メモ" },
+      { n: 5, kind: "select", text: "色" }, { n: 6, kind: "input:submit", text: "送信する" },
+      { n: 7, kind: "button", text: "×" }, { n: 8, kind: "h2", text: "通知の設定" }, { n: 9, kind: "button", text: "通知を保存" },
     ]);
-    expect(first.partsTotal).toBe(6);
-    expect(JSON.stringify(first)).not.toContain("秘密の値");
-    expect(rmp.read(["--ticket", ticket])).toContain("#6 button 「通知を保存」");
+    expect(first.partsTotal).toBe(9);
+    for (const secret of ["秘密の値", "秘密のメモ", "選んだ色"]) expect(JSON.stringify(first)).not.toContain(secret);
+    expect(rmp.read(["--ticket", ticket])).toContain("#9 button 「通知を保存」");
     const point = (numbers: string, note: string) => execFileSync("python3", [join(root, "inbox/rmp-inbox.py"), "point", ticket, numbers, note], { env: rmp.env });
-
-    point("6", "保存はここです");
     const frames = page.locator("#rmp-point-root");
+
+    // A capture taken while a frame is out does not show it (#1 is in view: a capture right after a scroll comes out blank headless).
+    point("1", "");
+    await expect(frames.locator(".frame")).toBeVisible({ timeout: 8_000 });
+    await overlay.getByRole("button", { name: "撮影" }).click();
+    await expect(overlay.locator(".rmp-still")).toBeAttached();
+    await page.keyboard.press("Enter");
+    await overlay.locator("textarea").fill("撮影");
+    await rmp.send(page);
+    const captureTicket = (await rmp.tickets()).find((value) => value !== ticket)!;
+    const [capture] = await rmp.annotations(captureTicket) as Array<{ kind: string; image: string }>;
+    expect(capture.kind).toBe("capture");
+    expect((await pixels(page, capture.image)).red).toBeLessThan(100);
+
+    point("9", "保存はここです");
     await expect(frames.locator(".label")).toContainText("Claude: 保存はここです", { timeout: 8_000 });
     await expect(page.locator("#save")).toBeInViewport();
     await expect.poll(async () => {
@@ -942,17 +960,27 @@ test("24 送ると部品一覧が付き、point の番号に赤枠が出てそ�
     }).toBeLessThan(2);
     await rmp.screenshot(page, "24-point");
     // × with the bar out removes the frame and does not become a mark.
+    await expect(frames.locator(".frame")).toBeVisible();
     await frames.getByRole("button", { name: "赤枠を消す" }).click();
+    await expect(frames).not.toBeAttached();
+    await expect(overlay.locator(".rmp-mark")).toHaveCount(0);
+
+    // With the bar out, pressing the framed part reaches the page instead of marking it.
+    await overlay.locator(".rmp-modes").getByRole("button", { name: "要素", exact: true }).click();
+    point("9", "");
+    await expect(frames.locator(".frame")).toBeVisible({ timeout: 8_000 });
+    await page.locator("#save").click();
+    await expect(page.locator("body")).toHaveAttribute("data-saved", "1");
     await expect(frames).not.toBeAttached();
     await expect(overlay.locator(".rmp-mark")).toHaveCount(0);
 
     // A newer point while the bar is hidden; pressing the part itself is the user having found it.
     await rmp.trigger(page);
     await expect(overlay).not.toBeAttached();
-    point("5,6", "");
+    point("8,9", "");
     await expect(frames.locator(".frame")).toHaveCount(2, { timeout: 8_000 });
     await page.locator("#save").click();
-    await expect(page.locator("body")).toHaveAttribute("data-saved", "yes");
+    await expect(page.locator("body")).toHaveAttribute("data-saved", "2");
     await expect(frames).not.toBeAttached();
   });
 });

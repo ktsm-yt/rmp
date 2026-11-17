@@ -22,12 +22,21 @@ function kindOf(element: Element): string {
 // Never a field's value: what the user typed is not the page's, and a password must not leave the page.
 function textOf(element: Element): string {
   const named = squash(element.getAttribute("aria-label")) || squash(element.getAttribute("title"));
+  // A submit / button / reset input shows its value as its caption: that is the page's, not the user's.
+  if (element instanceof HTMLInputElement && ["submit", "button", "reset"].includes(element.type)) return named || squash(element.value);
   if (element instanceof HTMLInputElement || element instanceof HTMLSelectElement || element instanceof HTMLTextAreaElement) {
-    const label = squash([...element.labels ?? []].map((item) => item.innerText).join(" "));
-    return named || label || squash(element.getAttribute("placeholder")) || squash(element.getAttribute("name"));
+    return named || squash([...element.labels ?? []].map(labelText).join(" ")) ||
+      squash(element.getAttribute("placeholder")) || squash(element.getAttribute("name"));
   }
   const inner = element instanceof HTMLElement ? squash(element.innerText) : squash(element.textContent);
   return inner || named || squash(element.querySelector("img[alt]")?.getAttribute("alt"));
+}
+
+// A label's own words: a field inside it (a textarea's text, a select's options) is left out.
+function labelText(label: HTMLLabelElement): string {
+  const copy = label.cloneNode(true) as HTMLElement;
+  for (const field of copy.querySelectorAll("input,select,textarea,button")) field.remove();
+  return copy.textContent ?? "";
 }
 
 /** The page's headings and controls in document order, the hidden and the nameless left out, numbered from 1. */
@@ -59,8 +68,25 @@ shadow.innerHTML = `<style>
   .label button:hover{background:#ffffff59}
 </style>`;
 
-let shown: { element: Element; frame: HTMLElement; label?: HTMLElement }[] = [];
+let shown: { element: Element; part: Part; frame: HTMLElement; label?: HTMLElement }[] = [];
 let raf = 0;
+
+// The host's `all:initial!important` beats an inline style on the host, so hiding for a capture goes inside.
+export function hidePoint(hidden: boolean): void {
+  for (const element of shadow.querySelectorAll<HTMLElement>(".frame,.label")) element.style.visibility = hidden ? "hidden" : "";
+}
+
+/** The press lands on a framed part: the user acts on the page there, so the annotation mode lets it through. */
+export function isPointed(event: Event): boolean {
+  const path = event.composedPath();
+  return shown.some(({ element }) => path.includes(element));
+}
+
+// A part the page re-rendered, found again by its kind and text.
+function findAgain(part: Part): Element | undefined {
+  const fresh = collectParts(Infinity);
+  return fresh.elements[fresh.list.findIndex((item) => item.kind === part.kind && item.text === part.text)];
+}
 
 export function clearPoint(): void {
   cancelAnimationFrame(raf);
@@ -71,8 +97,14 @@ export function clearPoint(): void {
 
 // Re-read every frame: images loading, menus opening and scrolled boxes move parts without a scroll of the window.
 function follow(): void {
-  for (const { element, frame, label } of shown) {
-    const box = element.getBoundingClientRect();
+  for (const entry of shown) {
+    const { frame, label } = entry;
+    if (!entry.element.isConnected) {
+      const again = findAgain(entry.part);
+      if (again) entry.element = again;
+      else { clearPoint(); return; }
+    }
+    const box = entry.element.getBoundingClientRect();
     Object.assign(frame.style, { left: `${box.left - 4}px`, top: `${box.top - 4}px`, width: `${box.width + 8}px`, height: `${box.height + 8}px` });
     if (label) {
       // Beside the part when there is room, so it does not cover the heading above it; else above, else below.
@@ -89,19 +121,15 @@ function follow(): void {
 /** Frames the parts the point names and scrolls the first into view; a part the page dropped is looked up again by its kind and text. */
 export function showPoint(point: PointReply, parts: Parts): void {
   clearPoint();
-  let fresh: Parts | undefined;
   const missing: number[] = [];
   for (const n of point.numbers) {
-    let element = parts.elements[n - 1];
     const part = parts.list[n - 1];
-    if (element && !element.isConnected && part) {
-      fresh ??= collectParts(Infinity);
-      element = fresh.elements[fresh.list.findIndex((item) => item.kind === part.kind && item.text === part.text)];
-    }
-    if (!element?.isConnected) { missing.push(n); continue; }
+    let element: Element | undefined = parts.elements[n - 1];
+    if (part && element && !element.isConnected) element = findAgain(part);
+    if (!part || !element || !element.isConnected) { missing.push(n); continue; }
     const frame = document.createElement("div");
     frame.className = "frame";
-    shown.push({ element, frame });
+    shown.push({ element, part, frame });
   }
   const label = document.createElement("div");
   label.className = "label";
@@ -123,7 +151,6 @@ export function showPoint(point: PointReply, parts: Parts): void {
   follow();
 }
 
-// Pressing a framed part is the user having found it.
-addEventListener("click", (event) => {
-  if (shown.some(({ element }) => event.composedPath().includes(element))) clearPoint();
-}, true);
+// Pressing a framed part is the user having found it. Cleared after this click is dispatched, so the
+// annotation mode's own handlers still see the press as on a framed part (isPointed) and let it through.
+addEventListener("click", (event) => { if (isPointed(event)) setTimeout(clearPoint); }, true);

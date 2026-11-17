@@ -4,7 +4,7 @@ import {
   DraftDebouncer, documentRect, keyAction, manualToast, newAnnotation, nextMode, rangeText, scrollOffset,
   selectMark, selectorFor, startDeliveryWatch, startPointWatch, type Mode,
 } from "./logic";
-import { collectParts, pointHost, showPoint } from "./point";
+import { collectParts, hidePoint, isPointed, pointHost, showPoint } from "./point";
 
 type SendReply = { kind: "pick"; list: TargetList } |
   { kind: "sent"; result: InboxSendResult; route: "now" | "next" | "manual" | "pending" };
@@ -313,6 +313,8 @@ class Overlay {
   }
 
   private isOurs(event: Event): boolean { const path = event.composedPath(); return path.includes(this.host) || path.includes(pointHost); }
+  // Presses the annotation mode leaves to the page: on our own bars, and on a part Claude framed.
+  private passes(event: Event): boolean { return this.isOurs(event) || isPointed(event); }
   private point(event: MouseEvent): Point { return { x: event.clientX + scrollOffset("x"), y: event.clientY + scrollOffset("y") }; }
 
   private targetAt(x: number, y: number, smallest: boolean): Element | null {
@@ -396,7 +398,7 @@ class Overlay {
   }
 
   private onMove(event: MouseEvent): void {
-    if (!this.active || this.isOurs(event) || this.sending) return;
+    if (!this.active || this.passes(event) || this.sending) return;
     this.pointer = { x: event.clientX, y: event.clientY };
     const start = this.dragStart, point = this.point(event);
     if (start && !this.dragging && Math.hypot(point.x - start.x, point.y - start.y) >= 4) this.dragging = true;
@@ -411,7 +413,7 @@ class Overlay {
   }
 
   private onDown(event: MouseEvent): void {
-    if (!event.isTrusted || !this.active || this.isOurs(event) || this.sending || event.button !== 0) return;
+    if (!event.isTrusted || !this.active || this.passes(event) || this.sending || event.button !== 0) return;
     this.dragged = false;
     const strayAfterPen = this.leftPen && Boolean(this.card);
     this.leftPen = false;
@@ -430,7 +432,7 @@ class Overlay {
   }
 
   private onClick(event: MouseEvent): void {
-    if (!event.isTrusted || !this.active || this.isOurs(event) || this.mode !== "element" || this.sending || event.button !== 0) return;
+    if (!event.isTrusted || !this.active || this.passes(event) || this.mode !== "element" || this.sending || event.button !== 0) return;
     // A drag opened its comment on mouseup, before the page's own mouseup handlers (which may focus a field of the
     // page), so the comment takes the focus back here, as an element mark opened on click keeps it.
     if (this.dragged) { this.dragged = false; event.preventDefault(); event.stopImmediatePropagation(); this.editor?.focus({ preventScroll: true }); return; }
@@ -462,7 +464,7 @@ class Overlay {
     this.dragStart = null;
     this.dragging = false;
     this.selectFrom = null;
-    if (!this.active || this.isOurs(event) || this.sending) return;
+    if (!this.active || this.passes(event) || this.sending) return;
     // Nothing got selected (the page forbids it): the drag falls back to a range.
     if (this.mode === "element" && dragStart && selecting && this.addSelection(event.shiftKey)) {
       this.dragged = true;
@@ -915,14 +917,15 @@ class Overlay {
   }
 
   private async screenshot(): Promise<Screenshot> {
-    const hidden = [pointHost, ...this.shadow.querySelectorAll<HTMLElement>(".rmp-toolbar,.rmp-penbar,.rmp-list,.rmp-card,.rmp-toast,.rmp-hover,.rmp-note")];
+    const hidden = [...this.shadow.querySelectorAll<HTMLElement>(".rmp-toolbar,.rmp-penbar,.rmp-list,.rmp-card,.rmp-toast,.rmp-hover,.rmp-note")];
     for (const element of hidden) element.style.visibility = "hidden";
+    hidePoint(true);
     try {
       await new Promise(requestAnimationFrame);
       await new Promise(requestAnimationFrame);
       const viewerCapture = (window as Window & { __rmpViewerCapture?: () => Promise<Screenshot> }).__rmpViewerCapture;
       return viewerCapture ? await viewerCapture() : await request<Screenshot>({ type: "rmp:capture" });
-    } finally { for (const element of hidden) element.style.visibility = ""; }
+    } finally { for (const element of hidden) element.style.visibility = ""; hidePoint(false); }
   }
 
   private async freeze(): Promise<void> {
