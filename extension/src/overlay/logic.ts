@@ -221,14 +221,17 @@ export function manualToast(deliver?: string): string {
 /**
  * Asks the inbox for Claude's latest `point` on a send every 3 s for 30 min, and once more whenever `poke()` is called
  * (a tab back in view: background tabs' timers are slowed). A newer one is handed to onPoint. An inbox that does not
- * know /point stops the watch.
+ * know /point stops the watch. The first failed ask goes to onFail (the asking goes on): a service worker older than
+ * this page's script refuses rmp:point, and swallowing that left the user waiting for a frame that never came.
  */
 export function startPointWatch(
   fetchPoint: () => Promise<PointResult>,
   onPoint: (point: PointReply) => void,
+  onFail: (error: unknown) => void = () => {},
   clock: Clock = window,
 ): { stop: () => void; poke: () => void } {
   let stopped = false;
+  let failed = false;
   let seen = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = clock.setTimeout(() => stop(), 30 * 60_000);
@@ -241,7 +244,10 @@ export function startPointWatch(
     if (timer !== undefined) clock.clearTimeout(timer);
     timer = undefined;
     let result: PointResult = null;
-    try { result = await fetchPoint(); } catch { /* the next round asks again */ }
+    try { result = await fetchPoint(); }
+    catch (error) {
+      if (!failed && !stopped) { failed = true; onFail(error); }
+    }
     if (stopped) return;
     if (result === "unsupported") { stop(); return; }
     if (result && result.seq > seen) { seen = result.seq; onPoint(result); }

@@ -25,6 +25,7 @@ HTTP (127.0.0.1 only, extension origin only):
                   404 when T is not unread in new/<sid>/. Each ticket is typed at most once.
   POST /point     body: {"ticket": T}    -> 200 {ticket, point: {seq, numbers, note} | null}, the latest
                   `point` for T. The extension polls this after a send and frames those parts on the page.
+                  Handing a point out is recorded in points/<T>.served, so `point` can say whether a page took it.
   GET  /sessions?url=<tab url>[&last=<sid>] -> live Claude sessions + a guess at the target
 
 The first annotation of a send may carry `parts` (the page's headings, links, buttons and fields, numbered
@@ -1094,7 +1095,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._reply(400)
                 return
             if self.path == "/point":
-                self._reply(200, {"ticket": ticket, "point": latest_point(ticket)})
+                point = latest_point(ticket)
+                self._reply(200, {"ticket": ticket, "point": point})
+                if point and isinstance(point.get("seq"), int):
+                    mark_served(ticket, point["seq"])
                 return
             status, _ = find_ticket(ticket)
             self._reply(200, {"ticket": ticket, "status": status or "missing"})
@@ -1197,6 +1201,26 @@ def latest_point(ticket):
     return point if isinstance(point, dict) else None
 
 
+def served_seq(ticket):
+    try:
+        return int((POINTS / f"{ticket}.served").read_text())
+    except (OSError, ValueError):
+        return 0
+
+
+def mark_served(ticket, seq):
+    """The page asked and was handed this point (written only when it changes: the page asks every 3 s)."""
+    if served_seq(ticket) == seq:
+        return
+    tmp = POINTS / f".{ticket}-{os.getpid()}-{threading.get_ident()}.served"
+    tmp.write_text(str(seq))
+    tmp.replace(POINTS / f"{ticket}.served")
+
+
+# The page asks every 3 s; a little over one round, so a live page is seen and a gone one is not waited on long.
+POINT_WAIT = float(os.environ.get("RMP_POINT_WAIT") or 8)
+
+
 def point(args):
     """point <ticket> <n>[,<n>...] [note]: the extension that sent <ticket> frames those parts and scrolls to the first."""
     ticket = args[0] if args else ""
@@ -1223,8 +1247,19 @@ def point(args):
     POINTS.mkdir(parents=True, exist_ok=True)
     tmp = POINTS / f".{ticket}-{os.getpid()}.json"
     tmp.write_text(json.dumps({"seq": time.time_ns(), "numbers": numbers, "note": note}, ensure_ascii=False))
+    seq = json.loads(tmp.read_text())["seq"]
     tmp.replace(POINTS / f"{ticket}.json")
-    print(f"ページに赤枠を出します: {ticket} の #{', #'.join(map(str, numbers))} (ページが開いたままなら数秒で出ます)")
+    where = f"{ticket} の #{', #'.join(map(str, numbers))}"
+    # Writing the file says nothing about the page (2026-11-17: a stale extension never asked, and this said "出します").
+    deadline = time.time() + POINT_WAIT
+    while served_seq(ticket) < seq and time.time() < deadline:
+        time.sleep(0.25)
+    if served_seq(ticket) >= seq:
+        print(f"ページが受け取りました: {where} に赤枠を出しています")
+    else:
+        print(f"ページがまだ受け取っていません ({POINT_WAIT:g} 秒待ちました): {where}\n"
+              "送ったタブを閉じた、送ってから 30 分を過ぎた、拡張を読み込み直していない (古い版のまま) のどれかです。"
+              "赤枠が見えているかを user に確かめ、見えなければ場所を文で伝えてください (受け取れない理由はページの右上にも出ます)")
 
 
 def consume(files, notes=None, notify_race=False):
