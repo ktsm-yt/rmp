@@ -984,3 +984,27 @@ test("24 送ると部品一覧が付き、point の番号に赤枠が出てそ�
     await expect(frames).not.toBeAttached();
   });
 });
+
+test("25 ページが拡張に問い合わせられない時は、赤枠の代わりに理由を出し、point はページが受け取っていないと返す", async () => {
+  await withFixture(1, async (rmp) => {
+    rmp.setSite((_request, response) => {
+      response.setHeader("content-type", "text/html; charset=utf-8");
+      response.end("<main style='margin:80px;width:420px;height:160px'>実際の注釈対象です</main><button>保存</button>");
+    });
+    const page = await rmp.open();
+    await dragRange(page);
+    await rmp.send(page);
+    const ticket = await rmp.ticket();
+    const point = () => execFileSync("python3", [join(root, "inbox/rmp-inbox.py"), "point", ticket, "1"],
+      { env: { ...rmp.env, RMP_POINT_WAIT: "5" } }).toString();
+    // The page's asks reach the extension: point hears that the page took it.
+    expect(point()).toContain("ページが受け取りました");
+    // The extension alone is reloaded (as when its service worker is older or newer than the page's script).
+    await rmp.reloadExtension();
+    const notice = page.locator("#rmp-point-root .label");
+    await expect(notice).toContainText("Claude の赤枠を受け取れません", { timeout: 8_000 });
+    await expect(notice).toContainText("拡張を再読み込みしてから、このタブも再読み込みしてください");
+    await rmp.screenshot(page, "25-point-notice");
+    expect(point()).toContain("ページがまだ受け取っていません");
+  });
+});

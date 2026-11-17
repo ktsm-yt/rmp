@@ -109,6 +109,7 @@ class Base(unittest.TestCase):
             "HOME": str(self.tmp / "home"),
             "RMP_RMV_URL": NO_RMV,
             "CLAUDE_CODE_SESSION_ID": ME,
+            "RMP_POINT_WAIT": "0.2",
             **extra,
         }
 
@@ -960,7 +961,7 @@ class Server(unittest.TestCase):
         self.assertEqual(self.post("/point", {"ticket": ticket}), (200, {"ticket": ticket, "point": None}))
         env = {**os.environ, "RMP_INBOX_ROOT": str(self.tmp / "inbox"), "RMP_CLAUDE_SESSIONS": str(self.tmp / "sessions"),
                "RMP_INBOX_NO_NOTIFY": "1", "HOME": str(self.tmp / "home")}
-        subprocess.run([sys.executable, str(SCRIPT), "point", ticket, "1", "保存はここ"], check=True, capture_output=True, env=env)
+        subprocess.run([sys.executable, str(SCRIPT), "point", ticket, "1", "保存はここ"], check=True, capture_output=True, env={**env, "RMP_POINT_WAIT": "0"})
         code, body = self.post("/point", {"ticket": ticket})
         self.assertEqual((code, body["point"]["numbers"], body["point"]["note"]), (200, [1], "保存はここ"))
         self.assertEqual(self.post("/point", {"ticket": "bad"})[0], 400)
@@ -968,6 +969,26 @@ class Server(unittest.TestCase):
         for bad in ([{"n": "1", "kind": "a", "text": "b"}], [{"n": 1, "kind": "a"}], "x", [{"n": 1, "kind": "a", "text": "b"}] * 1001):
             self.assertEqual(self.post("/done", [{**SEND[0], "parts": bad}])[0], 400)
         self.assertEqual(self.post("/done", [{**SEND[0], "parts": parts, "partsTotal": -1}])[0], 400)
+
+    def test_point_says_whether_a_page_took_it(self):
+        code, body = self.post("/done", [{**SEND[0], "parts": [{"n": 1, "kind": "button", "text": "保存"}]}])
+        ticket = body["ticket"]
+        env = {**os.environ, "RMP_INBOX_ROOT": str(self.tmp / "inbox"), "RMP_CLAUDE_SESSIONS": str(self.tmp / "sessions"),
+               "RMP_INBOX_NO_NOTIFY": "1", "HOME": str(self.tmp / "home")}
+        # No page asks (a closed tab, a stale extension): it says so instead of "出します".
+        out = subprocess.run([sys.executable, str(SCRIPT), "point", ticket, "1"], capture_output=True, text=True,
+                             env={**env, "RMP_POINT_WAIT": "0.5"}).stdout
+        self.assertIn("ページがまだ受け取っていません", out)
+        # A page that asks while point waits is reported as having taken it.
+        cli = subprocess.Popen([sys.executable, str(SCRIPT), "point", ticket, "1"], stdout=subprocess.PIPE, text=True,
+                               env={**env, "RMP_POINT_WAIT": "10"})
+        for _ in range(100):  # the page's 3 s asks, sped up
+            if cli.poll() is not None:
+                break
+            self.post("/point", {"ticket": ticket})
+            time.sleep(0.1)
+        out, _ = cli.communicate(timeout=15)
+        self.assertIn("ページが受け取りました", out)
 
     def test_draft_overwrite_delete_and_read_does_not_consume(self):
         first = [{"displayNumber": 1, "kind": "text", "comment": "one"}]

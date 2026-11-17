@@ -116,7 +116,7 @@ describe("draft and ticket timing", () => {
     let answer: { seq: number; numbers: number[]; note: string } | null | "unsupported" = null;
     const fetchPoint = vi.fn(async () => answer);
     const onPoint = vi.fn();
-    const watch = startPointWatch(fetchPoint, onPoint, globalThis);
+    const watch = startPointWatch(fetchPoint, onPoint, vi.fn(), globalThis);
     await vi.advanceTimersByTimeAsync(3000);
     expect(onPoint).not.toHaveBeenCalled();
     answer = { seq: 5, numbers: [2], note: "" };
@@ -134,11 +134,31 @@ describe("draft and ticket timing", () => {
     await vi.advanceTimersByTimeAsync(30_000);
     expect(fetchPoint.mock.calls.length).toBe(calls);
     const late = vi.fn(async () => null);
-    startPointWatch(late, vi.fn(), globalThis);
+    startPointWatch(late, vi.fn(), vi.fn(), globalThis);
     await vi.advanceTimersByTimeAsync(30 * 60_000);
     const done = late.mock.calls.length;
     await vi.advanceTimersByTimeAsync(30_000);
     expect(late.mock.calls.length).toBe(done);
+    vi.useRealTimers();
+  });
+
+  it("tells the first failed ask (a stale service worker refusing rmp:point) once, and keeps asking", async () => {
+    vi.useFakeTimers();
+    let refuse = true;
+    const fetchPoint = vi.fn(async () => {
+      if (refuse) throw new Error("拡張への依頼が不正です");
+      return { seq: 1, numbers: [2], note: "" };
+    });
+    const onPoint = vi.fn();
+    const onFail = vi.fn();
+    startPointWatch(fetchPoint, onPoint, onFail, globalThis);
+    await vi.advanceTimersByTimeAsync(9000);
+    expect(fetchPoint).toHaveBeenCalledTimes(3);
+    expect(onFail).toHaveBeenCalledTimes(1);
+    expect(onFail).toHaveBeenLastCalledWith(new Error("拡張への依頼が不正です"));
+    refuse = false;
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(onPoint).toHaveBeenCalledTimes(1);
     vi.useRealTimers();
   });
 

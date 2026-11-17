@@ -326,6 +326,12 @@ export class RmpFixture {
     return target;
   }
 
+  /** Reloads the extension alone: a page opened before keeps its old script, which can no longer reach the extension. */
+  async reloadExtension(): Promise<void> {
+    const worker = this.context!.serviceWorkers()[0]!;
+    await worker.evaluate(() => { setTimeout(() => chrome.runtime.reload(), 50); });
+  }
+
   /** Sending opens the rmv side panel, and a recording then shows only the page's left part: the point demo closes it. */
   async closeSidePanel(): Promise<void> {
     const panels = async () => ((await this.cdp!.send("Target.getTargets", { filter: [{}] })) as { targetInfos: TargetInfo[] })

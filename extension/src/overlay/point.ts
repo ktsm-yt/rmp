@@ -88,11 +88,41 @@ function findAgain(part: Part): Element | undefined {
   return fresh.elements[fresh.list.findIndex((item) => item.kind === part.kind && item.text === part.text)];
 }
 
+let notice: HTMLElement | undefined;
+
 export function clearPoint(): void {
   cancelAnimationFrame(raf);
   for (const { frame, label } of shown) { frame.remove(); label?.remove(); }
   shown = [];
+  notice?.remove();
+  notice = undefined;
   pointHost.remove();
+}
+
+function noteLabel(text: string): HTMLElement {
+  const label = document.createElement("div");
+  label.className = "label";
+  label.setAttribute("role", "status");
+  const span = document.createElement("span");
+  span.textContent = text;
+  label.title = text;
+  const close = document.createElement("button");
+  close.textContent = "×";
+  close.setAttribute("aria-label", "赤枠を消す");
+  close.addEventListener("click", clearPoint);
+  label.append(span, close);
+  return label;
+}
+
+/** Why no frame can come, at the top right, until × (or a frame that does come). */
+export function showPointNotice(text: string): void {
+  clearPoint();
+  notice = noteLabel(text);
+  // Below the annotation bar (top right, about 52px tall), not over its buttons.
+  Object.assign(notice.style, { right: "12px", top: "72px" });
+  notice.querySelector("span")!.style.whiteSpace = "normal";
+  shadow.append(notice);
+  document.documentElement.append(pointHost);
 }
 
 // Re-read every frame: images loading, menus opening and scrolled boxes move parts without a scroll of the window.
@@ -131,18 +161,8 @@ export function showPoint(point: PointReply, parts: Parts): void {
     frame.className = "frame";
     shown.push({ element, part, frame });
   }
-  const label = document.createElement("div");
-  label.className = "label";
-  label.setAttribute("role", "status");
-  const text = document.createElement("span");
   const gone = missing.length ? `#${missing.join(", #")} はページから無くなっています` : "";
-  text.textContent = [`Claude: ${point.note || "ここです"}`, gone].filter(Boolean).join(" · ");
-  label.title = text.textContent;
-  const close = document.createElement("button");
-  close.textContent = "×";
-  close.setAttribute("aria-label", "赤枠を消す");
-  close.addEventListener("click", clearPoint);
-  label.append(text, close);
+  const label = noteLabel([`Claude: ${point.note || "ここです"}`, gone].filter(Boolean).join(" · "));
   if (shown[0]) shown[0].label = label;
   else Object.assign(label.style, { right: "12px", top: "12px" });
   shadow.append(...shown.map(({ frame }) => frame), label);
