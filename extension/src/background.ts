@@ -1,5 +1,5 @@
 import {
-  INBOX_AFTER_RMV, INBOX_BASE_URL, buildTargetList, deliverViaInbox, deliverViaRmv, fetchInboxSessions, fetchTicketStatus,
+  INBOX_AFTER_RMV, INBOX_BASE_URL, buildTargetList, deliverViaInbox, deliverViaRmv, fetchInboxSessions, fetchPoint, fetchTicketStatus,
   lastTargetAfterSend, parseLastTarget, postAnnotationsToInbox, probeRmvDeliver,
 } from "./inboxSend";
 import type { InboxSession, InboxSendResult, SessionsReply, TargetDelivery } from "./inboxSend";
@@ -139,6 +139,8 @@ export function createBackground(api: typeof chrome, fetchImpl: typeof fetch = f
         return { image: await api.tabs.captureVisibleTab(sender.tab!.windowId!, { format: "jpeg", quality: 80 }) };
       }
       case "rmp:status": return fetchTicketStatus(raw.ticket, { fetchImpl });
+      // Wrapped: a bare null reply cannot be told from "no listener".
+      case "rmp:point": return { point: await fetchPoint(raw.ticket, { fetchImpl }) };
     }
   }
   return { activate, handle };

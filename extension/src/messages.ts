@@ -11,7 +11,8 @@ export type PageMessage =
   | { type: "rmp:send"; url: string; annotations: Annotation[]; picked?: { sid: string | null } }
   | { type: "rmp:draft"; url: string; title: string; annotations: Annotation[] }
   | { type: "rmp:capture" }
-  | { type: "rmp:status"; ticket: string };
+  | { type: "rmp:status"; ticket: string }
+  | { type: "rmp:point"; ticket: string };
 
 const kinds = new Set(["dom", "range", "text", "pen", "capture"]);
 const record = (value: unknown): value is Record<string, unknown> =>
@@ -36,6 +37,9 @@ export function validAnnotations(value: unknown): value is Annotation[] {
     if (a.image !== undefined && (typeof a.image !== "string" ||
         !/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(a.image))) return false;
     if (a.imageRect !== undefined && !validRect(a.imageRect)) return false;
+    if (a.parts !== undefined && !(Array.isArray(a.parts) && a.parts.length <= 1000 && a.parts.every((part) =>
+      record(part) && Number.isInteger(part.n) && text(part.kind) && text(part.text)))) return false;
+    if (a.partsTotal !== undefined && !(Number.isInteger(a.partsTotal) && Number(a.partsTotal) >= 0)) return false;
     return true;
   });
 }
@@ -61,7 +65,7 @@ export function validMessage(
     case "rmp:send": return text(value.url) && picked(value.picked) && validAnnotations(value.annotations);
     case "rmp:draft": return text(value.url) && text(value.title) && validAnnotations(value.annotations);
     case "rmp:capture": return true;
-    case "rmp:status": return isTicket(value.ticket);
+    case "rmp:status": case "rmp:point": return isTicket(value.ticket);
     default: return false;
   }
 }

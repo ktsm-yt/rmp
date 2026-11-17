@@ -1,9 +1,10 @@
 import type { InboxSendResult, TargetList } from "../inboxSend";
-import type { Annotation, Rect } from "../types";
+import type { Annotation, PointResult, Rect } from "../types";
 import {
   DraftDebouncer, documentRect, keyAction, manualToast, newAnnotation, nextMode, rangeText, scrollOffset,
-  selectMark, selectorFor, startDeliveryWatch, type Mode,
+  selectMark, selectorFor, startDeliveryWatch, startPointWatch, type Mode,
 } from "./logic";
+import { collectParts, hidePoint, isPointed, pointHost, showPoint } from "./point";
 
 type SendReply = { kind: "pick"; list: TargetList } |
   { kind: "sent"; result: InboxSendResult; route: "now" | "next" | "manual" | "pending" };
@@ -85,6 +86,8 @@ class Overlay {
   // so more marks can still be added before sending.
   private sendOnPick = false;
   private readonly watches = new Set<() => void>();
+  // Waiting for Claude to point at a sent page's part. Kept past × and hiding the bar: the answer comes later.
+  private readonly pointWatches = new Set<{ stop: () => void; poke: () => void }>();
   private sending = false;
   private capturing = false;
   private tabId: number | undefined;
@@ -197,6 +200,9 @@ class Overlay {
       if (this.active) { this.hideHover(); this.renderMarks(); this.renderStrokes(); }
     }, true);
     addEventListener("resize", () => { if (this.active) { this.resizeCanvas(); this.renderMarks(); } });
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") for (const watch of this.pointWatches) watch.poke();
+    });
     this.canvas.addEventListener("pointerdown", (event) => this.startPen(event));
     this.canvas.addEventListener("pointermove", (event) => this.drawPen(event));
     this.canvas.addEventListener("pointerup", (event) => this.endShape(event));
@@ -306,11 +312,13 @@ class Overlay {
     await this.copyText(String(this.tabId), "タブ ID をコピーしました");
   }
 
-  private isOurs(event: Event): boolean { return event.composedPath().includes(this.host); }
+  private isOurs(event: Event): boolean { const path = event.composedPath(); return path.includes(this.host) || path.includes(pointHost); }
+  // Presses the annotation mode leaves to the page: on our own bars, and on a part Claude framed.
+  private passes(event: Event): boolean { return this.isOurs(event) || isPointed(event); }
   private point(event: MouseEvent): Point { return { x: event.clientX + scrollOffset("x"), y: event.clientY + scrollOffset("y") }; }
 
   private targetAt(x: number, y: number, smallest: boolean): Element | null {
-    const targets = document.elementsFromPoint(x, y).filter((element) => element !== this.host &&
+    const targets = document.elementsFromPoint(x, y).filter((element) => element !== this.host && element !== pointHost &&
       !this.host.contains(element) && element !== document.documentElement && element !== document.body);
     if (!smallest) {
       const top = targets[0];
@@ -390,7 +398,7 @@ class Overlay {
   }
 
   private onMove(event: MouseEvent): void {
-    if (!this.active || this.isOurs(event) || this.sending) return;
+    if (!this.active || this.passes(event) || this.sending) return;
     this.pointer = { x: event.clientX, y: event.clientY };
     const start = this.dragStart, point = this.point(event);
     if (start && !this.dragging && Math.hypot(point.x - start.x, point.y - start.y) >= 4) this.dragging = true;
@@ -405,7 +413,7 @@ class Overlay {
   }
 
   private onDown(event: MouseEvent): void {
-    if (!event.isTrusted || !this.active || this.isOurs(event) || this.sending || event.button !== 0) return;
+    if (!event.isTrusted || !this.active || this.passes(event) || this.sending || event.button !== 0) return;
     this.dragged = false;
     const strayAfterPen = this.leftPen && Boolean(this.card);
     this.leftPen = false;
@@ -424,7 +432,7 @@ class Overlay {
   }
 
   private onClick(event: MouseEvent): void {
-    if (!event.isTrusted || !this.active || this.isOurs(event) || this.mode !== "element" || this.sending || event.button !== 0) return;
+    if (!event.isTrusted || !this.active || this.passes(event) || this.mode !== "element" || this.sending || event.button !== 0) return;
     // A drag opened its comment on mouseup, before the page's own mouseup handlers (which may focus a field of the
     // page), so the comment takes the focus back here, as an element mark opened on click keeps it.
     if (this.dragged) { this.dragged = false; event.preventDefault(); event.stopImmediatePropagation(); this.editor?.focus({ preventScroll: true }); return; }
@@ -456,7 +464,7 @@ class Overlay {
     this.dragStart = null;
     this.dragging = false;
     this.selectFrom = null;
-    if (!this.active || this.isOurs(event) || this.sending) return;
+    if (!this.active || this.passes(event) || this.sending) return;
     // Nothing got selected (the page forbids it): the drag falls back to a range.
     if (this.mode === "element" && dragStart && selecting && this.addSelection(event.shiftKey)) {
       this.dragged = true;
@@ -868,6 +876,9 @@ class Overlay {
     this.renderToolbar();
     try {
       const annotations = this.annotations.map(({ displayRect: _displayRect, ...annotation }) => annotation);
+      // The PDF viewer's parts are pdf.js's own toolbar, not the document.
+      const parts = "__rmpViewerCapture" in window ? null : collectParts();
+      if (parts) annotations[0] = { ...annotations[0]!, parts: parts.list, partsTotal: parts.total };
       const reply = await request<SendReply>({ type: "rmp:send", url: location.href,
         annotations, picked: this.picked });
       if (reply.kind === "pick") { this.sendOnPick = true; if (this.active) this.renderList(reply.list); return; }
@@ -892,6 +903,13 @@ class Overlay {
           () => this.toast("読まれた"), (text, success) => this.copyText(text, success));
         this.watches.add(stop);
       }
+      if (ticket && parts) {
+        const watch = startPointWatch(
+          async () => (await request<{ point: PointResult }>({ type: "rmp:point", ticket })).point,
+          (point) => showPoint(point, parts),
+        );
+        this.pointWatches.add(watch);
+      }
     } finally {
       this.sending = false;
       this.renderToolbar();
@@ -901,12 +919,13 @@ class Overlay {
   private async screenshot(): Promise<Screenshot> {
     const hidden = [...this.shadow.querySelectorAll<HTMLElement>(".rmp-toolbar,.rmp-penbar,.rmp-list,.rmp-card,.rmp-toast,.rmp-hover,.rmp-note")];
     for (const element of hidden) element.style.visibility = "hidden";
+    hidePoint(true);
     try {
       await new Promise(requestAnimationFrame);
       await new Promise(requestAnimationFrame);
       const viewerCapture = (window as Window & { __rmpViewerCapture?: () => Promise<Screenshot> }).__rmpViewerCapture;
       return viewerCapture ? await viewerCapture() : await request<Screenshot>({ type: "rmp:capture" });
-    } finally { for (const element of hidden) element.style.visibility = ""; }
+    } finally { for (const element of hidden) element.style.visibility = ""; hidePoint(false); }
   }
 
   private async freeze(): Promise<void> {

@@ -326,6 +326,14 @@ export class RmpFixture {
     return target;
   }
 
+  /** Sending opens the rmv side panel, and a recording then shows only the page's left part: the point demo closes it. */
+  async closeSidePanel(): Promise<void> {
+    const panels = async () => ((await this.cdp!.send("Target.getTargets", { filter: [{}] })) as { targetInfos: TargetInfo[] })
+      .targetInfos.filter((target) => target.url.endsWith("/sidepanel.html"));
+    await expect.poll(async () => (await panels()).length).toBeGreaterThan(0);
+    for (const target of await panels()) await this.cdp!.send("Target.closeTarget", { targetId: target.targetId }).catch(() => {});
+  }
+
   async trigger(page: Page): Promise<void> {
     const target = await this.actionTarget(page);
     await this.cdp!.send("Extensions.triggerAction", { id: this.extensionIdValue, targetId: target.targetId });
@@ -342,9 +350,10 @@ export class RmpFixture {
     const context = this.context!;
     await Promise.all(context.pages().map((page) => page.close()));
     const page = await context.newPage();
-    const origin = this.url("").replace(/\/$/, "");
-    await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin });
-    await page.goto(this.url(path));
+    // An absolute URL opens a real page (the point demo); a path opens the fixture site.
+    const url = /^https?:/.test(path) ? path : this.url(path);
+    await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: new URL(url).origin });
+    await page.goto(url);
     // ponytail: the service worker may not listen yet right after launch, so press the toolbar
     // button again (at most 6 times) only while no overlay appeared; evaluating inside the worker hung.
     for (let attempt = 1; ; attempt += 1) {
