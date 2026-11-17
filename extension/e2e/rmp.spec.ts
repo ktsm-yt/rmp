@@ -1001,10 +1001,15 @@ test("25 ページが拡張に問い合わせられない時は、赤枠の代�
     expect(point()).toContain("ページが受け取りました");
     // The extension alone is reloaded (as when its service worker is older or newer than the page's script).
     await rmp.reloadExtension();
-    const notice = page.locator("#rmp-point-root .label");
-    await expect(notice).toContainText("Claude の赤枠を受け取れません", { timeout: 8_000 });
+    const notice = page.locator("#rmp-point-root .label", { hasText: "Claude の赤枠を受け取れません" });
+    await expect(notice).toBeVisible({ timeout: 8_000 });
     await expect(notice).toContainText("拡張を再読み込みしてから、このタブも再読み込みしてください");
+    // The frame already out stays (it goes only on a press or its ×).
+    await expect(page.locator("#rmp-point-root .frame")).toBeVisible();
     await rmp.screenshot(page, "25-point-notice");
     expect(point()).toContain("ページがまだ受け取っていません");
+    await notice.getByRole("button", { name: "案内を消す" }).click();
+    await expect(notice).not.toBeAttached();
+    await expect(page.locator("#rmp-point-root .frame")).toBeVisible();
   });
 });

@@ -99,7 +99,7 @@ export function clearPoint(): void {
   pointHost.remove();
 }
 
-function noteLabel(text: string): HTMLElement {
+function noteLabel(text: string, onClose: () => void = clearPoint, closeName = "赤枠を消す"): HTMLElement {
   const label = document.createElement("div");
   label.className = "label";
   label.setAttribute("role", "status");
@@ -108,21 +108,27 @@ function noteLabel(text: string): HTMLElement {
   label.title = text;
   const close = document.createElement("button");
   close.textContent = "×";
-  close.setAttribute("aria-label", "赤枠を消す");
-  close.addEventListener("click", clearPoint);
+  close.setAttribute("aria-label", closeName);
+  close.addEventListener("click", onClose);
   label.append(span, close);
   return label;
 }
 
-/** Why no frame can come, at the top right, until × (or a frame that does come). */
+/** Why no frame can come, below the bar, until × or the next ask that gets through. Frames already out stay. */
 export function showPointNotice(text: string): void {
-  clearPoint();
-  notice = noteLabel(text);
+  hidePointNotice();
+  notice = noteLabel(text, hidePointNotice, "案内を消す");
   // Below the annotation bar (top right, about 52px tall), not over its buttons.
   Object.assign(notice.style, { right: "12px", top: "72px" });
   notice.querySelector("span")!.style.whiteSpace = "normal";
   shadow.append(notice);
   document.documentElement.append(pointHost);
+}
+
+export function hidePointNotice(): void {
+  notice?.remove();
+  notice = undefined;
+  if (!shown.length) pointHost.remove();
 }
 
 // Re-read every frame: images loading, menus opening and scrolled boxes move parts without a scroll of the window.

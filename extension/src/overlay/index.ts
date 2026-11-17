@@ -4,7 +4,7 @@ import {
   DraftDebouncer, documentRect, keyAction, manualToast, newAnnotation, nextMode, rangeText, scrollOffset,
   selectMark, selectorFor, startDeliveryWatch, startPointWatch, type Mode,
 } from "./logic";
-import { collectParts, hidePoint, isPointed, pointHost, showPoint, showPointNotice } from "./point";
+import { collectParts, hidePoint, hidePointNotice, isPointed, pointHost, showPoint, showPointNotice } from "./point";
 
 type SendReply = { kind: "pick"; list: TargetList } |
   { kind: "sent"; result: InboxSendResult; route: "now" | "next" | "manual" | "pending" };
@@ -905,7 +905,11 @@ class Overlay {
       }
       if (ticket && parts) {
         const watch = startPointWatch(
-          async () => (await request<{ point: PointResult }>({ type: "rmp:point", ticket })).point,
+          async () => {
+            const { point } = await request<{ point: PointResult }>({ type: "rmp:point", ticket });
+            hidePointNotice();
+            return point;
+          },
           (point) => showPoint(point, parts),
           (error) => showPointNotice(`Claude の赤枠を受け取れません (${reason(error)})。拡張を再読み込みしてから、このタブも再読み込みしてください`),
         );
