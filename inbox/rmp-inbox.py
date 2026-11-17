@@ -7,6 +7,7 @@
   rmp-inbox.py read --ticket <T>     # exactly one send
   rmp-inbox.py read --all            # everything unread (rescue)
   rmp-inbox.py read --draft <tabId>  # tab's unsent draft, without changing it
+  rmp-inbox.py point <T> <n>[,<n>...] [note]  # frame parts n of send T's parts list on the user's page
   rmp-inbox.py hook-session          # Claude Code SessionStart hook: register this session
   rmp-inbox.py hook-prompt           # Claude Code UserPromptSubmit hook: register + tell of unread sends
 
@@ -22,7 +23,13 @@ HTTP (127.0.0.1 only, extension origin only):
   POST /deliver   body: {sid, ticket}    -> 200 {ok, via: "herdr"} after typing `/rmp T` + Enter into the
                   herdr pane of sid's Claude (without rmv); 409 "<word>: why" when a check fails (check_pane),
                   404 when T is not unread in new/<sid>/. Each ticket is typed at most once.
+  POST /point     body: {"ticket": T}    -> 200 {ticket, point: {seq, numbers, note} | null}, the latest
+                  `point` for T. The extension polls this after a send and frames those parts on the page.
   GET  /sessions?url=<tab url>[&last=<sid>] -> live Claude sessions + a guess at the target
+
+The first annotation of a send may carry `parts` (the page's headings, links, buttons and fields, numbered
+from 1 in document order: [{n, kind, text}]) and `partsTotal` (how many there were before the extension's
+cap). read prints them under the send, so Claude can answer "where is X?" with a number and `point` it.
 
 Hooks read the hook JSON on stdin (session_id, cwd) and keep a registry
 ~/.rmp-inbox/sessions/<sid>.json. GET /sessions lists a registered session with delivery "next"
@@ -75,6 +82,8 @@ ALLOWED_ORIGINS = frozenset(
 )
 ROOT = Path(os.environ.get("RMP_INBOX_ROOT") or Path.home() / ".rmp-inbox")
 NEW, READ, IMAGES, DRAFTS = ROOT / "new", ROOT / "read", ROOT / "images", ROOT / "drafts"
+POINTS = ROOT / "points"  # <ticket>.json: the latest `point` for that send
+MAX_PARTS = 1000  # the extension caps its list lower (overlay/point.ts); this only bounds what is stored
 REGISTRY = ROOT / "sessions"  # <sid>.json written by the hooks
 CLAUDE_SESSIONS = Path(os.environ.get("RMP_CLAUDE_SESSIONS") or Path.home() / ".claude" / "sessions")
 RMV_PORT = 4310
@@ -948,8 +957,24 @@ def valid_annotations(annotations):
                 base64.b64decode(image.split(",", 1)[1], validate=True)
             except (ValueError, binascii.Error):
                 return False
+        if "parts" in annotation and not valid_parts(annotation["parts"]):
+            return False
+        total = annotation.get("partsTotal")
+        if "partsTotal" in annotation and (not isinstance(total, int) or isinstance(total, bool) or total < 0):
+            return False
         rect = annotation.get("imageRect")
         if "imageRect" in annotation and (not isinstance(rect, dict) or any(not isinstance(rect.get(key), (int, float)) or isinstance(rect.get(key), bool) for key in ("x", "y", "width", "height"))):
+            return False
+    return True
+
+
+def valid_parts(parts):
+    if not isinstance(parts, list) or len(parts) > MAX_PARTS:
+        return False
+    for part in parts:
+        if not isinstance(part, dict) or not isinstance(part.get("n"), int) or isinstance(part["n"], bool):
+            return False
+        if not all(isinstance(part.get(key), str) for key in ("kind", "text")):
             return False
     return True
 
@@ -995,7 +1020,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         """Preflight for Firefox: X-RMP-To on /done is not a simple header."""
-        if urlsplit(self.path).path not in ("/sessions", "/done", "/draft", "/status", "/deliver") or not self._allowed():
+        if urlsplit(self.path).path not in ("/sessions", "/done", "/draft", "/status", "/deliver", "/point") or not self._allowed():
             self._reply(403)
             return
         self.send_response(204)
@@ -1038,7 +1063,7 @@ class Handler(BaseHTTPRequestHandler):
         self._reply(200, sessions_for(url, last if UUID_RE.match(last) else ""))
 
     def do_POST(self):
-        if self.path not in ("/done", "/draft", "/status", "/deliver") or not self._allowed():
+        if self.path not in ("/done", "/draft", "/status", "/deliver", "/point") or not self._allowed():
             self._reply(403)
             return
         raw = self._body(MAX_BODY if self.path in ("/done", "/draft") else 4096)
@@ -1063,10 +1088,13 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._text(code, text)
             return
-        if self.path == "/status":
+        if self.path in ("/status", "/point"):
             ticket = payload.get("ticket") if isinstance(payload, dict) else None
             if not isinstance(ticket, str) or not TICKET_RE.match(ticket):
                 self._reply(400)
+                return
+            if self.path == "/point":
+                self._reply(200, {"ticket": ticket, "point": latest_point(ticket)})
                 return
             status, _ = find_ticket(ticket)
             self._reply(200, {"ticket": ticket, "status": status or "missing"})
@@ -1151,6 +1179,52 @@ def print_send(f, note=""):
     print(f"=== {f.stem} ({len(anns)} 件){note} {flat(first.get('title', ''))}\n{flat(first.get('url', ''))}")
     for a in anns:
         print(describe(a, f.stem))
+    parts = first.get("parts")
+    if isinstance(parts, list) and parts:
+        total = first.get("partsTotal") or len(parts)
+        cut = f"。ページには {total} 個あり、先頭から {len(parts)} 個で打ち切り" if total > len(parts) else ""
+        print(f"  部品一覧 (送った時のページの見出し・リンク・ボタン・入力欄 {len(parts)} 個{cut}):")
+        for part in parts:
+            print(f"    #{flat(part.get('n'))} {flat(part.get('kind'))} 「{flat(part.get('text'))}」")
+        print(f"  ページの場所を示す時: python3 {Path(__file__).resolve()} point {f.stem} <番号> [ひとこと]")
+
+
+def latest_point(ticket):
+    try:
+        point = json.loads((POINTS / f"{ticket}.json").read_text())
+    except (OSError, ValueError):
+        return None
+    return point if isinstance(point, dict) else None
+
+
+def point(args):
+    """point <ticket> <n>[,<n>...] [note]: the extension that sent <ticket> frames those parts and scrolls to the first."""
+    ticket = args[0] if args else ""
+    _, path = find_ticket(ticket)
+    if path is None:
+        sys.exit(f"ticket {ticket or '（未指定）'} の注釈はありません (形式は YYYYMMDD-HHMMSS-NNNNNN)")
+    try:
+        anns = json.loads(path.read_text())
+        parts = anns[0].get("parts") if anns else None
+    except (OSError, ValueError, AttributeError):
+        parts = None
+    if not isinstance(parts, list) or not parts:
+        sys.exit(f"ticket {ticket} には部品一覧がありません (部品一覧を添えない版の拡張か、PDF から送った分です)")
+    numbers = []
+    for word in (args[1] if len(args) > 1 else "").split(","):
+        if not word.strip().isdigit():
+            sys.exit("番号を 1 つ以上、カンマ区切りで渡してください (例: point <ticket> 12 または 12,15)")
+        numbers.append(int(word))
+    known = {part.get("n") for part in parts if isinstance(part, dict)}
+    unknown = [n for n in numbers if n not in known]
+    if unknown:
+        sys.exit(f"番号 {', '.join(map(str, unknown))} は部品一覧にありません (1〜{len(parts)})")
+    note = " ".join(args[2:])[:200]
+    POINTS.mkdir(parents=True, exist_ok=True)
+    tmp = POINTS / f".{ticket}-{os.getpid()}.json"
+    tmp.write_text(json.dumps({"seq": time.time_ns(), "numbers": numbers, "note": note}, ensure_ascii=False))
+    tmp.replace(POINTS / f"{ticket}.json")
+    print(f"ページに赤枠を出します: {ticket} の #{', #'.join(map(str, numbers))} (ページが開いたままなら数秒で出ます)")
 
 
 def consume(files, notes=None, notify_race=False):
@@ -1420,6 +1494,8 @@ def main():
         ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
     elif mode == "read":
         read(sys.argv[2:])
+    elif mode == "point":
+        point(sys.argv[2:])
     else:
         sys.exit(__doc__)
 

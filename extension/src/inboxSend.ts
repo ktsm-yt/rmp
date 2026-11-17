@@ -1,6 +1,8 @@
 // Posts the overlay's Send to the local inbox and reports
 // what happened, so the overlay can tell the user instead of dropping a failed send silently.
 
+import type { PointResult } from "./types";
+
 declare const __RMP_INBOX_BASE_URL__: string | undefined;
 declare const __RMP_RMV_BASE_URL__: string | undefined;
 
@@ -262,6 +264,28 @@ export async function fetchTicketStatus(
     return null;
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/** POST /point {ticket}: Claude's latest point, null when there is none yet or the inbox did not answer,
+ *  "unsupported" when the inbox refuses the path (one older than /point: stop asking). */
+export async function fetchPoint(
+  ticket: unknown,
+  options: { fetchImpl?: typeof fetch; timeoutMs?: number; base?: string } = {},
+): Promise<PointResult> {
+  if (!isTicket(ticket)) return "unsupported";
+  try {
+    const response = await (options.fetchImpl ?? fetch)(`${options.base ?? INBOX_BASE_URL}/point`, {
+      method: "POST", body: JSON.stringify({ ticket }), signal: AbortSignal.timeout(options.timeoutMs ?? 3000),
+    });
+    if (response.status !== 200) return "unsupported";
+    const body: unknown = await response.json();
+    const point = isRecordLike(body) ? body.point : undefined;
+    if (!isRecordLike(point) || !Number.isFinite(point.seq) || !Array.isArray(point.numbers) ||
+        !point.numbers.every((n) => Number.isInteger(n) && n > 0)) return null;
+    return { seq: Number(point.seq), numbers: point.numbers as number[], note: typeof point.note === "string" ? point.note : "" };
+  } catch {
+    return null;
   }
 }
 

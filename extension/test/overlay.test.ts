@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { DraftDebouncer, keyAction, manualToast, newAnnotation, nextMode, rangeText, selectMark, selectorFor, startDeliveryWatch, startTicketWatch } from "../src/overlay/logic.js";
+import { DraftDebouncer, keyAction, manualToast, newAnnotation, nextMode, rangeText, selectMark, selectorFor, startDeliveryWatch, startPointWatch, startTicketWatch } from "../src/overlay/logic.js";
 
 const key = (over: Partial<Parameters<typeof keyAction>[0]> = {}) => keyAction({
   key: "Enter", metaKey: false, isComposing: false, keyCode: 13, isTrusted: true, inComment: false, listOpen: false, ...over,
@@ -108,6 +108,37 @@ describe("draft and ticket timing", () => {
     await vi.advanceTimersByTimeAsync(300);
     await expect(drafts.clear()).resolves.toBeUndefined();
     expect(write.mock.calls).toEqual([[[{ kind: "text", displayNumber: 1, comment: "first" }]], [[]]]);
+    vi.useRealTimers();
+  });
+
+  it("hands each newer point to onPoint once, asks at once on a poke, and stops for an inbox without /point or after 30 min", async () => {
+    vi.useFakeTimers();
+    let answer: { seq: number; numbers: number[]; note: string } | null | "unsupported" = null;
+    const fetchPoint = vi.fn(async () => answer);
+    const onPoint = vi.fn();
+    const watch = startPointWatch(fetchPoint, onPoint, globalThis);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(onPoint).not.toHaveBeenCalled();
+    answer = { seq: 5, numbers: [2], note: "" };
+    watch.poke();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onPoint).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(9000);
+    expect(onPoint).toHaveBeenCalledTimes(1);
+    answer = { seq: 6, numbers: [3], note: "こっち" };
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(onPoint).toHaveBeenLastCalledWith(answer);
+    answer = "unsupported";
+    await vi.advanceTimersByTimeAsync(3000);
+    const calls = fetchPoint.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(fetchPoint.mock.calls.length).toBe(calls);
+    const late = vi.fn(async () => null);
+    startPointWatch(late, vi.fn(), globalThis);
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    const done = late.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(late.mock.calls.length).toBe(done);
     vi.useRealTimers();
   });
 

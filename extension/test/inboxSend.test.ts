@@ -5,6 +5,7 @@ import {
   deliverViaInbox,
   deliverViaRmv,
   fetchInboxSessions,
+  fetchPoint,
   fetchTicketStatus,
   INBOX_BASE_URL,
   INBOX_DONE_URL,
@@ -283,6 +284,27 @@ describe("fetchTicketStatus", () => {
         fetchImpl: vi.fn(async () => reply(200, { status: "weird" })),
       }),
     ).toBeNull();
+  });
+});
+
+describe("fetchPoint", () => {
+  const ticket = "20261023-071713-735053";
+  it("posts the ticket and returns the latest point, or null while there is none", async () => {
+    const fetchImpl = vi.fn(async () => reply(200, { ticket, point: { seq: 7, numbers: [3, 4], note: "ここ" } }));
+    expect(await fetchPoint(ticket, { fetchImpl })).toEqual({ seq: 7, numbers: [3, 4], note: "ここ" });
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(`${INBOX_BASE_URL}/point`);
+    expect(JSON.parse(String(init.body))).toEqual({ ticket });
+    expect(await fetchPoint(ticket, { fetchImpl: vi.fn(async () => reply(200, { ticket, point: null })) })).toBeNull();
+    expect(await fetchPoint(ticket, { fetchImpl: vi.fn(async () => reply(200, { point: { seq: 1, numbers: [0] } })) })).toBeNull();
+    expect(await fetchPoint(ticket, { fetchImpl: vi.fn(async () => { throw new TypeError("Failed to fetch"); }) })).toBeNull();
+  });
+
+  it("says unsupported when the inbox refuses /point (an older inbox) so the page stops asking", async () => {
+    expect(await fetchPoint(ticket, { fetchImpl: vi.fn(async () => reply(403, null)) })).toBe("unsupported");
+    const fetchImpl = vi.fn();
+    expect(await fetchPoint("../x", { fetchImpl })).toBe("unsupported");
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
 

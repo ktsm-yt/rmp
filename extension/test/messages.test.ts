@@ -13,6 +13,8 @@ describe("runtime message boundary", () => {
     { type: "rmp:draft", url: "https://example.com", title: "題", annotations: [] },
     { type: "rmp:capture" },
     { type: "rmp:status", ticket: "20261025-223344-123456" },
+    { type: "rmp:point", ticket: "20261025-223344-123456" },
+    { type: "rmp:send", url: "x", annotations: [{ ...annotation, parts: [{ n: 1, kind: "h2", text: "設定" }], partsTotal: 1 }] },
   ])("accepts a known well-shaped message: $type", (message) => {
     expect(validMessage(message, sender, "extension")).toBe(true);
   });
@@ -26,6 +28,10 @@ describe("runtime message boundary", () => {
     { type: "rmp:send", url: "x", annotations: [{ ...annotation, comment: {} }] },
     { type: "rmp:send", url: "x", annotations: Array(201).fill(annotation) },
     { type: "rmp:status", ticket: "anything" },
+    { type: "rmp:point", ticket: "anything" },
+    { type: "rmp:send", url: "x", annotations: [{ ...annotation, parts: [{ n: "1", kind: "h2", text: "x" }] }] },
+    { type: "rmp:send", url: "x", annotations: [{ ...annotation, parts: Array(1001).fill({ n: 1, kind: "a", text: "b" }) }] },
+    { type: "rmp:send", url: "x", annotations: [{ ...annotation, partsTotal: -1 }] },
   ])("rejects malformed requests %#", (message) => {
     expect(validMessage(message, sender, "extension")).toBe(false);
   });

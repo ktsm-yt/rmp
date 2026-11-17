@@ -1,4 +1,4 @@
-import type { Annotation, Rect } from "../types.js";
+import type { Annotation, PointReply, PointResult, Rect } from "../types.js";
 
 export type Mode = "element" | "pen";
 export const MODES: Mode[] = ["element", "pen"];
@@ -216,4 +216,37 @@ const MANUAL_WHY: Record<string, string> = {
 export function manualToast(deliver?: string): string {
   const why = deliver ? MANUAL_WHY[deliver] : undefined;
   return why ? `手で: ${why}ためコピーしました` : "手で: コピーしました";
+}
+
+/**
+ * Asks the inbox for Claude's latest `point` on a send every 3 s for 30 min, and once more whenever `poke()` is called
+ * (a tab back in view: background tabs' timers are slowed). A newer one is handed to onPoint. An inbox that does not
+ * know /point stops the watch.
+ */
+export function startPointWatch(
+  fetchPoint: () => Promise<PointResult>,
+  onPoint: (point: PointReply) => void,
+  clock: Clock = window,
+): { stop: () => void; poke: () => void } {
+  let stopped = false;
+  let seen = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = clock.setTimeout(() => stop(), 30 * 60_000);
+  const stop = () => {
+    stopped = true;
+    if (timer !== undefined) clock.clearTimeout(timer);
+    clock.clearTimeout(deadline);
+  };
+  const check = async () => {
+    if (timer !== undefined) clock.clearTimeout(timer);
+    timer = undefined;
+    let result: PointResult = null;
+    try { result = await fetchPoint(); } catch { /* the next round asks again */ }
+    if (stopped) return;
+    if (result === "unsupported") { stop(); return; }
+    if (result && result.seq > seen) { seen = result.seq; onPoint(result); }
+    timer = clock.setTimeout(() => void check(), 3000);
+  };
+  timer = clock.setTimeout(() => void check(), 3000);
+  return { stop, poke: () => { if (!stopped) void check(); } };
 }

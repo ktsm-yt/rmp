@@ -1,11 +1,13 @@
+import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 import { dragRange, fragmentedPdf, japanesePdf, RmpFixture, sids, twoPagePdf } from "./fixtures.js";
 
 test.setTimeout(120_000);
+const root = resolve("..");
 
 async function withFixture(count: number, body: (rmp: RmpFixture) => Promise<void>): Promise<void> {
   const rmp = new RmpFixture();
@@ -899,5 +901,58 @@ test("22 コメント欄が開いている時に文字キーが欄の外へ届�
     await expect(field).toBeFocused();
     await page.evaluate(() => dispatchEvent(new Event("blur")));
     await expect.poll(async () => (await logs()).at(-1)).toContain("なぞった直後にページから焦点が抜けた");
+  });
+});
+
+test("24 送ると部品一覧が付き、point の番号に赤枠が出てその部品までスクロールし、× か部品を押すまで残る", async () => {
+  await withFixture(1, async (rmp) => {
+    rmp.setSite((_request, response) => {
+      response.setHeader("content-type", "text/html; charset=utf-8");
+      response.end(`<title>設定</title><main style="margin:80px;width:420px;height:160px">実際の注釈対象です</main>
+        <h2>アカウント</h2><a href="#profile">プロフィール</a>
+        <label>パスワード <input type="password" value="秘密の値"></label>
+        <button style="display:none">隠れた部品</button><button aria-label="閉じる">×</button>
+        <div style="height:2400px"></div>
+        <h2>通知の設定</h2><button id="save" onclick="document.body.dataset.saved='yes'">通知を保存</button>`);
+    });
+    const page = await rmp.open();
+    const overlay = page.locator("#rmp-overlay-root");
+    await dragRange(page);
+    await overlay.locator("textarea").fill("通知の設定どこ?");
+    await rmp.send(page);
+    const ticket = await rmp.ticket();
+    const [first] = await rmp.annotations(ticket) as Array<{ parts: { n: number; kind: string; text: string }[]; partsTotal: number }>;
+    expect(first.parts).toEqual([
+      { n: 1, kind: "h2", text: "アカウント" }, { n: 2, kind: "link", text: "プロフィール" },
+      { n: 3, kind: "input:password", text: "パスワード" }, { n: 4, kind: "button", text: "×" },
+      { n: 5, kind: "h2", text: "通知の設定" }, { n: 6, kind: "button", text: "通知を保存" },
+    ]);
+    expect(first.partsTotal).toBe(6);
+    expect(JSON.stringify(first)).not.toContain("秘密の値");
+    expect(rmp.read(["--ticket", ticket])).toContain("#6 button 「通知を保存」");
+    const point = (numbers: string, note: string) => execFileSync("python3", [join(root, "inbox/rmp-inbox.py"), "point", ticket, numbers, note], { env: rmp.env });
+
+    point("6", "保存はここです");
+    const frames = page.locator("#rmp-point-root");
+    await expect(frames.locator(".label")).toContainText("Claude: 保存はここです", { timeout: 8_000 });
+    await expect(page.locator("#save")).toBeInViewport();
+    await expect.poll(async () => {
+      const [frame, target] = await Promise.all([frames.locator(".frame").boundingBox(), page.locator("#save").boundingBox()]);
+      return frame && target ? Math.abs(frame.x + 4 - target.x) + Math.abs(frame.y + 4 - target.y) : Infinity;
+    }).toBeLessThan(2);
+    await rmp.screenshot(page, "24-point");
+    // × with the bar out removes the frame and does not become a mark.
+    await frames.getByRole("button", { name: "赤枠を消す" }).click();
+    await expect(frames).not.toBeAttached();
+    await expect(overlay.locator(".rmp-mark")).toHaveCount(0);
+
+    // A newer point while the bar is hidden; pressing the part itself is the user having found it.
+    await rmp.trigger(page);
+    await expect(overlay).not.toBeAttached();
+    point("5,6", "");
+    await expect(frames.locator(".frame")).toHaveCount(2, { timeout: 8_000 });
+    await page.locator("#save").click();
+    await expect(page.locator("body")).toHaveAttribute("data-saved", "yes");
+    await expect(frames).not.toBeAttached();
   });
 });

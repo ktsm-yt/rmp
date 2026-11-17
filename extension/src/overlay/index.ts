@@ -2,8 +2,10 @@ import type { InboxSendResult, TargetList } from "../inboxSend";
 import type { Annotation, Rect } from "../types";
 import {
   DraftDebouncer, documentRect, keyAction, manualToast, newAnnotation, nextMode, rangeText, scrollOffset,
-  selectMark, selectorFor, startDeliveryWatch, type Mode,
+  selectMark, selectorFor, startDeliveryWatch, startPointWatch, type Mode,
 } from "./logic";
+import { collectParts, pointHost, showPoint } from "./point";
+import type { PointResult } from "../types";
 
 type SendReply = { kind: "pick"; list: TargetList } |
   { kind: "sent"; result: InboxSendResult; route: "now" | "next" | "manual" | "pending" };
@@ -85,6 +87,8 @@ class Overlay {
   // so more marks can still be added before sending.
   private sendOnPick = false;
   private readonly watches = new Set<() => void>();
+  // Waiting for Claude to point at a sent page's part. Kept past × and hiding the bar: the answer comes later.
+  private readonly pointWatches = new Set<{ stop: () => void; poke: () => void }>();
   private sending = false;
   private capturing = false;
   private tabId: number | undefined;
@@ -197,6 +201,9 @@ class Overlay {
       if (this.active) { this.hideHover(); this.renderMarks(); this.renderStrokes(); }
     }, true);
     addEventListener("resize", () => { if (this.active) { this.resizeCanvas(); this.renderMarks(); } });
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") for (const watch of this.pointWatches) watch.poke();
+    });
     this.canvas.addEventListener("pointerdown", (event) => this.startPen(event));
     this.canvas.addEventListener("pointermove", (event) => this.drawPen(event));
     this.canvas.addEventListener("pointerup", (event) => this.endShape(event));
@@ -306,11 +313,11 @@ class Overlay {
     await this.copyText(String(this.tabId), "タブ ID をコピーしました");
   }
 
-  private isOurs(event: Event): boolean { return event.composedPath().includes(this.host); }
+  private isOurs(event: Event): boolean { const path = event.composedPath(); return path.includes(this.host) || path.includes(pointHost); }
   private point(event: MouseEvent): Point { return { x: event.clientX + scrollOffset("x"), y: event.clientY + scrollOffset("y") }; }
 
   private targetAt(x: number, y: number, smallest: boolean): Element | null {
-    const targets = document.elementsFromPoint(x, y).filter((element) => element !== this.host &&
+    const targets = document.elementsFromPoint(x, y).filter((element) => element !== this.host && element !== pointHost &&
       !this.host.contains(element) && element !== document.documentElement && element !== document.body);
     if (!smallest) {
       const top = targets[0];
@@ -868,6 +875,9 @@ class Overlay {
     this.renderToolbar();
     try {
       const annotations = this.annotations.map(({ displayRect: _displayRect, ...annotation }) => annotation);
+      // The PDF viewer's parts are pdf.js's own toolbar, not the document.
+      const parts = "__rmpViewerCapture" in window ? null : collectParts();
+      if (parts) annotations[0] = { ...annotations[0]!, parts: parts.list, partsTotal: parts.total };
       const reply = await request<SendReply>({ type: "rmp:send", url: location.href,
         annotations, picked: this.picked });
       if (reply.kind === "pick") { this.sendOnPick = true; if (this.active) this.renderList(reply.list); return; }
@@ -892,6 +902,13 @@ class Overlay {
           () => this.toast("読まれた"), (text, success) => this.copyText(text, success));
         this.watches.add(stop);
       }
+      if (ticket && parts) {
+        const watch = startPointWatch(
+          async () => (await request<{ point: PointResult }>({ type: "rmp:point", ticket })).point,
+          (point) => showPoint(point, parts),
+        );
+        this.pointWatches.add(watch);
+      }
     } finally {
       this.sending = false;
       this.renderToolbar();
@@ -899,7 +916,7 @@ class Overlay {
   }
 
   private async screenshot(): Promise<Screenshot> {
-    const hidden = [...this.shadow.querySelectorAll<HTMLElement>(".rmp-toolbar,.rmp-penbar,.rmp-list,.rmp-card,.rmp-toast,.rmp-hover,.rmp-note")];
+    const hidden = [pointHost, ...this.shadow.querySelectorAll<HTMLElement>(".rmp-toolbar,.rmp-penbar,.rmp-list,.rmp-card,.rmp-toast,.rmp-hover,.rmp-note")];
     for (const element of hidden) element.style.visibility = "hidden";
     try {
       await new Promise(requestAnimationFrame);

@@ -342,9 +342,10 @@ export class RmpFixture {
     const context = this.context!;
     await Promise.all(context.pages().map((page) => page.close()));
     const page = await context.newPage();
-    const origin = this.url("").replace(/\/$/, "");
-    await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin });
-    await page.goto(this.url(path));
+    // An absolute URL opens a real page (the point demo); a path opens the fixture site.
+    const url = /^https?:/.test(path) ? path : this.url(path);
+    await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: new URL(url).origin });
+    await page.goto(url);
     // ponytail: the service worker may not listen yet right after launch, so press the toolbar
     // button again (at most 6 times) only while no overlay appeared; evaluating inside the worker hung.
     for (let attempt = 1; ; attempt += 1) {
