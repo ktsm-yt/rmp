@@ -5,7 +5,7 @@ import type { Part, PointReply } from "../types";
 const PARTS = "h1,h2,h3,h4,h5,h6,a[href],button,input:not([type=hidden]),select,textarea,summary," +
   "[role=button],[role=link],[role=tab],[role=menuitem],[role=checkbox],[role=switch],[role=radio]";
 // ponytail: measured on real pages (PR body); raise it when a page's answer sits past the cut.
-export const PARTS_LIMIT = 300;
+const PARTS_LIMIT = 300;
 const TEXT_LIMIT = 80;
 
 export type Parts = { list: Part[]; total: number; elements: Element[] };

@@ -1,11 +1,10 @@
 import type { InboxSendResult, TargetList } from "../inboxSend";
-import type { Annotation, Rect } from "../types";
+import type { Annotation, PointResult, Rect } from "../types";
 import {
   DraftDebouncer, documentRect, keyAction, manualToast, newAnnotation, nextMode, rangeText, scrollOffset,
   selectMark, selectorFor, startDeliveryWatch, startPointWatch, type Mode,
 } from "./logic";
 import { collectParts, pointHost, showPoint } from "./point";
-import type { PointResult } from "../types";
 
 type SendReply = { kind: "pick"; list: TargetList } |
   { kind: "sent"; result: InboxSendResult; route: "now" | "next" | "manual" | "pending" };

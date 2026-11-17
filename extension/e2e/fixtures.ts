@@ -326,6 +326,14 @@ export class RmpFixture {
     return target;
   }
 
+  /** Sending opens the rmv side panel, and a recording then shows only the page's left part: the point demo closes it. */
+  async closeSidePanel(): Promise<void> {
+    const panels = async () => ((await this.cdp!.send("Target.getTargets", { filter: [{}] })) as { targetInfos: TargetInfo[] })
+      .targetInfos.filter((target) => target.url.endsWith("/sidepanel.html"));
+    await expect.poll(async () => (await panels()).length).toBeGreaterThan(0);
+    for (const target of await panels()) await this.cdp!.send("Target.closeTarget", { targetId: target.targetId }).catch(() => {});
+  }
+
   async trigger(page: Page): Promise<void> {
     const target = await this.actionTarget(page);
     await this.cdp!.send("Extensions.triggerAction", { id: this.extensionIdValue, targetId: target.targetId });

@@ -31,12 +31,14 @@ test("Claude がページを調べて、ここですと赤枠で示す", async (
     await overlay.locator("textarea").fill(question);
     await narrate(page, "送ると、ページの見出しやボタンの一覧も一緒に届きます。");
     await rmp.send(page);
+    await rmp.closeSidePanel();
     const ticket = await rmp.ticket();
     writeFileSync(join(handoff, "point-env.sh"), `export RMP_INBOX_ROOT='${rmp.inboxRoot}' RMP_INBOX_NO_NOTIFY=1 TICKET='${ticket}'\n`);
     writeFileSync(join(handoff, "read.txt"), rmp.read(["--ticket", ticket]));
     await narrate(page, "Claude は一覧から番号を選んで返します。");
     await expect(page.locator("#rmp-point-root .label")).toBeVisible({ timeout: 10 * 60_000 });
     await page.waitForTimeout(1500);
+    await page.screenshot({ path: join(handoff, "point.png") });
     await narrate(page, "赤枠が出て、その場所までスクロールしました。押すか、バツで消すまで残ります。");
     await page.locator("#rmp-point-root").getByRole("button", { name: "赤枠を消す" }).click();
     await expect(page.locator("#rmp-point-root")).not.toBeAttached();
