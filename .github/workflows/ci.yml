@@ -55,5 +55,13 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      # 調査用 (後で消す): macOS の runner だと受信箱の試験が 1 件 40 秒近くかかる。受信箱が呼ぶものの時間を測る
+      - name: 時間を測る
+        run: |
+          time /bin/ps -axo pid=,command= | wc -l
+          time /bin/ps -axo pid=,ppid=,lstart=,comm= | wc -l
+          time /bin/ps -Eww -o pid=,command= -p $$ | wc -c
+          time python3 -c 'import socket; print(socket.getfqdn("127.0.0.1"))'
+          time python3 -c 'import socket; print(socket.gethostbyaddr("127.0.0.1"))' || true
       - name: 受信箱
         run: python3 -u inbox/test_rmp_inbox.py -v
