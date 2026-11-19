@@ -1,0 +1,53 @@
+# PR と main への push で、拡張 (型・単体・e2e) と受信箱の試験を回す。
+# 受信箱は ps の環境変数の読み方が macOS 前提なので macOS で、拡張は Linux の Chromium で回す。
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  extension:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: extension
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+      - run: npm ci
+      - name: 型
+        run: npx tsc --noEmit -p .
+      - name: 組み上げ (単体試験が dist / dist-test / dist-firefox を読む)
+        run: |
+          node build.mjs
+          node build.mjs --test
+          node build.mjs --firefox
+      - name: 単体
+        run: npx vitest run
+      - name: e2e 用の Chromium
+        run: npx playwright install --with-deps chromium
+      - name: e2e
+        run: npx playwright test --trace off
+      - name: e2e の結果
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-results
+          path: extension/test-results
+          retention-days: 7
+
+  inbox:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 受信箱
+        run: python3 inbox/test_rmp_inbox.py
