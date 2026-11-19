@@ -186,6 +186,14 @@ export function startTicketWatch(
   return stop;
 }
 
+/** What the user pastes to hand a send over: `/rmp <ticket>` for Claude Code. Codex has no /rmp command, so it gets
+ *  a sentence pointing at the rmp skill's instructions (the same words rmv queues). */
+export function cueText(ticket: string, runtime?: string): string {
+  return runtime === "codex"
+    ? `rmp で赤ペンの注釈が届きました (チケット ${ticket})。~/.claude/skills/rmp/SKILL.md の手順で、このチケットの注釈を読んでください。`
+    : `/rmp ${ticket}`;
+}
+
 export function startDeliveryWatch(
   ticket: string,
   route: string,
@@ -193,9 +201,10 @@ export function startDeliveryWatch(
   onRead: () => void,
   copyText: (text: string, success: string) => Promise<void> | void,
   clock: Clock = window,
+  runtime?: string,
 ): () => void {
   return startTicketWatch(ticket, status, onRead, () => {
-    if (route === "pending") void copyText(`/rmp ${ticket}`, "手で: 未読のためコピーしました");
+    if (route === "pending") void copyText(cueText(ticket, runtime), "手で: 未読のためコピーしました");
   }, clock);
 }
 
@@ -209,7 +218,7 @@ const MANUAL_WHY: Record<string, string> = {
   not_enabled: "rmv がこの拡張からの打ち込みを受け付けていない",
   unknown_session: "rmv がこの会話を知らない",
   rmv_unreachable: "rmv が動いていない",
-  rmv_error: "rmv がエラーを返した",
+  rmv_error: "rmv がエラーを返した (Codex ならキューに積めなかった)",
   inbox_deliver_error: "受信箱が herdr の pane に打ち込めなかった",
 };
 
