@@ -198,8 +198,11 @@ export class RmpFixture {
     const inboxPort = await port();
     const rmvPort = await port();
     this.debugPort = await port();
-    await mkdir(join(root, "extension/e2e-results"), { recursive: true }); // a fresh clone has no e2e-results yet
-    (this as { temp: string }).temp = await mkdtemp(join(root, "extension/e2e-results/case-"));
+    // RMP_E2E_TEMP moves the cases out of a deep checkout: Chromium puts its SingletonSocket under TMPDIR and aborts when the
+    // socket path passes ~107 bytes (/home/runner/work/rmp/rmp/... on GitHub Actions did, measured 2026-11-19).
+    const cases = process.env.RMP_E2E_TEMP || join(root, "extension/e2e-results");
+    await mkdir(cases, { recursive: true }); // a fresh clone has no e2e-results yet
+    (this as { temp: string }).temp = await mkdtemp(join(cases, "case-"));
     (this as { inboxRoot: string }).inboxRoot = join(this.temp, "inbox");
     const sessions = join(this.temp, "sessions");
     const tmpdir = join(this.temp, "tmp");
