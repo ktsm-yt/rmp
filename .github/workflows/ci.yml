@@ -63,5 +63,9 @@ jobs:
           time /bin/ps -Eww -o pid=,command= -p $$ | wc -c
           time python3 -c 'import socket; print(socket.getfqdn("127.0.0.1"))'
           time python3 -c 'import socket; print(socket.gethostbyaddr("127.0.0.1"))' || true
+      - name: 1 件だけ回して、15 秒ごとにどこで待っているかを出す (調査用)
+        run: |
+          cd inbox
+          timeout 100 python3 -u -c 'import faulthandler, sys, runpy; faulthandler.dump_traceback_later(15, repeat=True); sys.argv = ["t", "-v", "Deliver.test_a_closed_pane_is_not_live"]; runpy.run_path("test_rmp_inbox.py", run_name="__main__")' || true
       - name: 受信箱
-        run: python3 -u inbox/test_rmp_inbox.py -v
+        run: python3 -u inbox/test_rmp_inbox.py -v Inbox
