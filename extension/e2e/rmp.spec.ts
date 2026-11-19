@@ -614,14 +614,31 @@ test("16 ショートカットで引っ込めても送る前の注釈は残り�
   });
 });
 
+// The page area where a wheel waits for a blocking handler, read from Chrome's compositor layers.
+async function wheelWaitArea(page: Page): Promise<number> {
+  const cdp = await page.context().newCDPSession(page);
+  type Layer = { scrollRects?: Array<{ type: string; rect: { width: number; height: number } }> };
+  const layers = new Promise<Layer[]>((done) => cdp.on("LayerTree.layerTreeDidChange", (event) => { if (event.layers) done(event.layers as Layer[]); }));
+  await cdp.send("LayerTree.enable");
+  // A frame with a change in it, so the layers are sent.
+  await page.evaluate(() => new Promise((done) => { document.body.style.outline = document.body.style.outline ? "" : "0 solid transparent"; requestAnimationFrame(() => requestAnimationFrame(done)); }));
+  const area = (await layers).flatMap((layer) => layer.scrollRects ?? []).filter((rect) => rect.type === "WheelEventHandler")
+    .reduce((sum, { rect }) => sum + rect.width * rect.height, 0);
+  await cdp.detach();
+  return area;
+}
+
 test("14 ペンの道具バーは中央下に出て、メインバーと道具バーは背景をドラッグして動かせる", async () => {
   await withFixture(1, async (rmp) => {
     const page = await rmp.open();
     const overlay = page.locator("#rmp-overlay-root");
     const box = async (selector: string) => (await overlay.locator(selector).boundingBox())!;
     const [width, height] = await page.evaluate(() => [innerWidth, innerHeight]);
+    // Outside the pen no wheel waits for us: a window-wide blocking handler let Chrome scroll fixed bars away (kirara).
+    expect(await wheelWaitArea(page)).toBe(0);
     await overlay.getByRole("button", { name: "撮影" }).click();
     await expect(overlay.locator(".rmp-still")).toBeAttached();
+    expect(await wheelWaitArea(page)).toBeGreaterThan(0);
     const pen = await box(".rmp-penbar");
     expect(Math.round(pen.x + pen.width / 2)).toBe(Math.round(width / 2));
     expect(Math.round(pen.y + pen.height)).toBe(height - 24);
@@ -641,6 +658,7 @@ test("14 ペンの道具バーは中央下に出て、メインバーと道具�
     expect(await box(".rmp-penbar")).toEqual(moved);
     await overlay.getByRole("button", { name: "やめる" }).click();
     await expect(overlay.locator(".rmp-still")).not.toBeAttached();
+    expect(await wheelWaitArea(page)).toBe(0);
   });
 });
 

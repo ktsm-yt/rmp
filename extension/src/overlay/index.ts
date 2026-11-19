@@ -207,9 +207,6 @@ class Overlay {
     this.canvas.addEventListener("pointermove", (event) => this.drawPen(event));
     this.canvas.addEventListener("pointerup", (event) => this.endShape(event));
     this.canvas.addEventListener("pointercancel", (event) => this.endShape(event));
-    // The page is a still while the pen is on; scrolling it would slide the strokes off the picture.
-    // ponytail: wheel only; arrow keys / Space can still scroll the page under the still.
-    this.canvas.addEventListener("wheel", (event) => event.preventDefault(), { passive: false });
     // Inside a dialog our presses would reach it, and a dialog that closes on a click outside its box would close on
     // the bar (drawn outside the box). Our own handlers sit below the host or capture on document / window.
     for (const type of ["pointerdown", "pointerup", "mousedown", "mouseup", "click"]) this.host.addEventListener(type, (event) => event.stopPropagation());
@@ -272,6 +269,7 @@ class Overlay {
     this.active = false;
     this.mode = "element";
     this.canvas.classList.remove("pen");
+    this.holdWheel(false);
     this.unfreeze();
     this.saveComment(true);
     this.annotations = [];
@@ -531,6 +529,16 @@ class Overlay {
     else if (action === "send") { this.saveComment(true); this.run(() => this.send()); }
   }
 
+  // The page is a still while the pen is on; scrolling it would slide the strokes off the picture.
+  // ponytail: wheel only; arrow keys / Space can still scroll the page under the still.
+  // Held only in pen mode: a blocking wheel handler on the window-sized canvas made Chrome scroll the page's fixed
+  // header and our bar away with the page on some sites (kirara), even with the canvas at pointer-events:none.
+  private readonly stopWheel = (event: WheelEvent) => event.preventDefault();
+  private holdWheel(on: boolean): void {
+    if (on) this.canvas.addEventListener("wheel", this.stopWheel, { passive: false });
+    else this.canvas.removeEventListener("wheel", this.stopWheel);
+  }
+
   private setMode(mode: Mode): void {
     // Leaving the pen keeps what was drawn as a mark.
     if (this.mode === "pen" && mode !== "pen") this.run(async () => { await this.finishPen(); this.unfreeze(); });
@@ -540,6 +548,7 @@ class Overlay {
     this.hideHover();
     this.renderToolbar();
     this.canvas.classList.toggle("pen", mode === "pen");
+    this.holdWheel(mode === "pen");
     // After the pen bar is up, so the screenshot hides it too.
     if (entering) this.run(() => this.freeze());
   }
