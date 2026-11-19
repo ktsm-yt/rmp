@@ -1,6 +1,7 @@
-# PR と main への push で、拡張 (型・単体・e2e) と受信箱の試験を回す。
-# どちらも macOS で回す: 受信箱は ps の環境変数の読み方が macOS 前提、拡張の e2e も macOS の Chromium の IME の振る舞い
-# (変換中の Enter の後に押した Enter で変換が確定する) を前提にしている。Linux の Chromium では確定せず、試験 7 が落ちる。
+# PR と main への push で、拡張 (型・組み上げ・単体) と受信箱の試験を回す。
+# 受信箱は ps の環境変数の読み方が macOS 前提なので macOS で回す。
+# e2e (npm run e2e) はここでは回さず、手元の npm run check で回す。runner では OS ごとに環境由来で 1 件ずつ落ちる
+# (Linux: 7 IME の確定が起きない / macOS: 22 PDF の日本語の文字の層が出ない、2026-11-19)。
 name: ci
 
 on:
@@ -13,8 +14,8 @@ permissions:
 
 jobs:
   extension:
-    runs-on: macos-latest
-    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: extension
@@ -35,20 +36,6 @@ jobs:
           node build.mjs --firefox
       - name: 単体
         run: npx vitest run
-      - name: e2e 用の Chromium
-        run: npx playwright install chromium
-      - name: e2e
-        # Chromium の SingletonSocket のパスが長すぎると起動直後に落ちるので、試験の一時置き場を短いパスにする
-        env:
-          RMP_E2E_TEMP: /tmp/rmp-e2e
-        run: npx playwright test --trace off
-      - name: e2e の結果
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-results
-          path: extension/test-results
-          retention-days: 7
 
   inbox:
     runs-on: macos-latest
