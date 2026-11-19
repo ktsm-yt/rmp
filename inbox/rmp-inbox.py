@@ -67,6 +67,7 @@ import sys
 import threading
 import time
 import urllib.request
+import socketserver
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -1517,6 +1518,14 @@ def hook(mode):
         pass
 
 
+class Server(ThreadingHTTPServer):
+    # HTTPServer.server_bind looks up the host name of 127.0.0.1 (socket.getfqdn) before it listens. Where the reverse
+    # lookup is slow that holds the start for ~35 s (GitHub's macOS runners, measured 2026-11-19). The name is unused here.
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else ""
     if mode in ("hook-session", "hook-prompt"):
@@ -1526,7 +1535,7 @@ def main():
     READ.mkdir(parents=True, exist_ok=True)
     IMAGES.mkdir(parents=True, exist_ok=True)
     if mode == "serve":
-        ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+        Server(("127.0.0.1", PORT), Handler).serve_forever()
     elif mode == "read":
         read(sys.argv[2:])
     elif mode == "point":
