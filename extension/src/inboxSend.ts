@@ -39,8 +39,10 @@ export type InboxSendResult = {
   reason: InboxSendReason;
   /** Set when the background asked rmv to type it: how that went (see deliverViaRmv). */
   deliver?: RmvDeliverReason;
-  /** "orca" | "herdr" when delivered. */
+  /** "orca" | "herdr" | "codex" when delivered. */
   via?: string;
+  /** "codex" when the target is a Codex conversation (set by the background): its cue is a sentence, not /rmp. */
+  runtime?: "codex";
   /** True when `/rmp <ticket>` was put on the clipboard (set by the background). */
   copied?: boolean;
 };
@@ -128,6 +130,8 @@ export type InboxSession = {
   deliverable?: boolean;
   /** The inbox itself can try typing into this session's herdr pane (POST /deliver, no rmv needed). */
   direct?: boolean;
+  /** "codex": a Codex conversation rmv confirmed in its herdr pane. rmv queues the cue with `codex queue`. */
+  runtime?: "codex";
 };
 
 export type SessionsReply =
@@ -205,6 +209,7 @@ function parseSession(raw: unknown): InboxSession | null {
     delivery,
     deliverable: raw.deliverable === true,
     direct: raw.direct === true,
+    ...(raw.runtime === "codex" ? { runtime: "codex" as const } : {}),
   };
 }
 
@@ -534,6 +539,8 @@ async function postDeliver(
       return { delivered: false, reason: stale ? "stale" : "not_live" };
     }
     if (response.status === 403) return { delivered: false, reason: "not_enabled" };
+    // rmv's `codex queue` did not answer in time: it may have queued the cue, so wait for a read like a timeout.
+    if (response.status === 504) return { delivered: false, reason: "rmv_timeout" };
     if (response.status === 404) return { delivered: false, reason: "unknown_session" };
     return { delivered: false, reason: "rmv_error" };
   } catch {

@@ -107,6 +107,7 @@ export function createBackground(api: typeof chrome, fetchImpl: typeof fetch = f
           await remember(result, to, reply, raw.picked?.sid === null).catch(() => {});
           const session = reply.available ? reply.sessions.find((s) => s.sid === to) : undefined;
           const option = list.options.find((s) => s.sid === to);
+          if (session?.runtime === "codex") result.runtime = "codex";
           if (option?.delivery === "now" && to && result.ticket) {
             // rmv first, as before. The inbox types into the herdr pane itself only when rmv is not there
             // to (not running, not opted in, does not know the session); never after rmv may have typed.

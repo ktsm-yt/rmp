@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { DraftDebouncer, keyAction, manualToast, newAnnotation, nextMode, rangeText, selectMark, selectorFor, startDeliveryWatch, startPointWatch, startTicketWatch } from "../src/overlay/logic.js";
+import { DraftDebouncer, cueText, keyAction, manualToast, newAnnotation, nextMode, rangeText, selectMark, selectorFor, startDeliveryWatch, startPointWatch, startTicketWatch } from "../src/overlay/logic.js";
 
 const key = (over: Partial<Parameters<typeof keyAction>[0]> = {}) => keyAction({
   key: "Enter", metaKey: false, isComposing: false, keyCode: 13, isTrusted: true, inComment: false, listOpen: false, ...over,
@@ -180,6 +180,12 @@ describe("draft and ticket timing", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(copy).toHaveBeenCalledTimes(1);
     expect(copy).toHaveBeenLastCalledWith("/rmp 20261025-010101-000001", "手で: 未読のためコピーしました");
+    const codexCopy = vi.fn();
+    startDeliveryWatch("20261025-010101-000004", "pending", async () => "new", vi.fn(), codexCopy, globalThis, "codex");
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(codexCopy).toHaveBeenLastCalledWith(cueText("20261025-010101-000004", "codex"), "手で: 未読のためコピーしました");
+    expect(cueText("20261025-010101-000004", "codex")).toContain("~/.claude/skills/rmp/SKILL.md");
+    expect(cueText("20261025-010101-000004", "codex")).not.toContain("/rmp 2026");
     const readCopy = vi.fn();
     startDeliveryWatch("20261025-010101-000002", "pending", async () => "read", vi.fn(), readCopy, globalThis);
     const nowCopy = vi.fn();
