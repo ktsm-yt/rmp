@@ -1,5 +1,6 @@
 # PR と main への push で、拡張 (型・単体・e2e) と受信箱の試験を回す。
-# 受信箱は ps の環境変数の読み方が macOS 前提なので macOS で、拡張は Linux の Chromium で回す。
+# どちらも macOS で回す: 受信箱は ps の環境変数の読み方が macOS 前提、拡張の e2e も macOS の Chromium の IME の振る舞い
+# (変換中の Enter の後に押した Enter で変換が確定する) を前提にしている。Linux の Chromium では確定せず、試験 7 が落ちる。
 name: ci
 
 on:
@@ -12,7 +13,7 @@ permissions:
 
 jobs:
   extension:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     timeout-minutes: 20
     defaults:
       run:
@@ -35,7 +36,7 @@ jobs:
       - name: 単体
         run: npx vitest run
       - name: e2e 用の Chromium
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install chromium
       - name: e2e
         # Chromium の SingletonSocket のパスが長すぎると起動直後に落ちるので、試験の一時置き場を短いパスにする
         env:
@@ -55,4 +56,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: 受信箱
-        run: python3 inbox/test_rmp_inbox.py
+        run: python3 -u inbox/test_rmp_inbox.py -v
