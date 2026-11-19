@@ -13,6 +13,7 @@ permissions:
 jobs:
   extension:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: extension
@@ -36,6 +37,9 @@ jobs:
       - name: e2e 用の Chromium
         run: npx playwright install --with-deps chromium
       - name: e2e
+        # Chromium の SingletonSocket のパスが長すぎると起動直後に落ちるので、試験の一時置き場を短いパスにする
+        env:
+          RMP_E2E_TEMP: /tmp/rmp-e2e
         run: npx playwright test --trace off
       - name: e2e の結果
         if: failure()
@@ -47,6 +51,7 @@ jobs:
 
   inbox:
     runs-on: macos-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: 受信箱
