@@ -279,17 +279,19 @@ class Inbox(Base):
         self.assertIn("他のセッション宛て 1 件", out)
 
     def test_send_for_a_running_headless_session_waits_until_it_exits(self):
-        # GET /sessions does not offer a `claude -p`, but while it runs read must not count it as ended.
-        pid = self.sleeper()
-        self.session(pid, A, entrypoint="sdk-cli")
-        t = self.put(A)
-        out = self.read("--session", ME)
-        self.assertFalse(self.is_read(t))
-        self.assertIn("他のセッション宛て 1 件", out)
-        (self.sessions / f"{pid}.json").unlink()  # Claude deletes <pid>.json on exit
-        out = self.read("--session", ME)
-        self.assertTrue(self.is_read(t))
-        self.assertIn("は終了済み", out)
+        # GET /sessions does not offer a `claude -p` or an Orca Bot, but while it runs read must not count it as ended.
+        for entrypoint in ("sdk-cli", "orca"):
+            with self.subTest(entrypoint):
+                pid = self.sleeper()
+                self.session(pid, A, entrypoint=entrypoint)
+                t = self.put(A)
+                out = self.read("--session", ME)
+                self.assertFalse(self.is_read(t))
+                self.assertIn("他のセッション宛て 1 件", out)
+                (self.sessions / f"{pid}.json").unlink()  # Claude deletes <pid>.json on exit
+                out = self.read("--session", ME)
+                self.assertTrue(self.is_read(t))
+                self.assertIn("は終了済み", out)
 
     def test_own_send_is_read(self):
         t = self.put(ME)
@@ -696,6 +698,17 @@ class SessionsList(Served):
         self.register(B, odd)
         got, _ = self.listing()
         self.assertEqual(set(got), {ME})
+
+    def test_a_session_orca_runs_is_not_listed(self):
+        # 2026-11-24: Orca Bots (cwd ~/.orca/bots/<name>) showed up as targets. Hooks run in them too.
+        bot = self.sleeper()
+        self.session(bot, A, entrypoint="orca", cwd="/h/.orca/bots/new-bot")
+        self.session(self.sleeper(), B, entrypoint="cli")  # typed into, also inside an Orca terminal
+        got, _ = self.listing()
+        self.assertEqual(set(got), {ME, B})
+        self.register(A, bot)
+        got, _ = self.listing()
+        self.assertEqual(set(got), {ME, B})
 
     def test_one_process_two_sids_lists_the_one_its_hook_reported_last(self):
         # ~/.claude/sessions still names ME for the process, the hook says it is A now (/clear).
