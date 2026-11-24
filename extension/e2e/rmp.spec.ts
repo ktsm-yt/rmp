@@ -1031,3 +1031,80 @@ test("25 ページが拡張に問い合わせられない時は、赤枠の代�
     await expect(page.locator("#rmp-point-root .frame")).toBeVisible();
   });
 });
+
+test("26 スクロールせず絵ごと動くページ (地図) でも、要素・文字・範囲・ペンの注釈が付いてきて、画面外では何も残らない", async () => {
+  await withFixture(1, async (rmp) => {
+    const page = await rmp.open();
+    const overlay = page.locator("#rmp-overlay-root");
+    await page.evaluate(() => {
+      document.body.innerHTML = `<div id="view" style="position:fixed;inset:0;overflow:hidden"><div id="world" style="position:absolute;left:0;top:0;transform-origin:0 0">
+        <p id="a" style="position:absolute;left:120px;top:100px;width:260px;margin:0">要素の注釈を付ける段落</p>
+        <p id="b" style="position:absolute;left:120px;top:200px;width:260px;margin:0">文字をなぞる<b>ための段落</b>です</p>
+        <div style="position:absolute;left:120px;top:320px;width:300px;height:120px;background:#eee"><span>範囲を囲む部品</span></div>
+        <svg style="position:absolute;left:600px;top:120px" width="200" height="160"><rect width="200" height="160" fill="#ddd"/></svg></div></div>`;
+    });
+    const drag = async (from: number[], to: number[]) => {
+      await page.mouse.move(from[0]!, from[1]!);
+      await page.mouse.down();
+      await page.mouse.move(to[0]!, to[1]!, { steps: 5 });
+      await page.mouse.up();
+    };
+    const comment = async (text: string) => { await page.keyboard.type(text); await page.keyboard.press("Enter"); };
+    await page.mouse.click(370, 108);
+    await comment("a");
+    await drag([124, 208], [280, 208]);
+    await comment("b");
+    // On a part, then on the blank between the parts (nothing of the map under it).
+    await drag([300, 380], [400, 430]);
+    await comment("c");
+    await drag([470, 350], [560, 420]);
+    await comment("d");
+    await overlay.getByRole("button", { name: "撮影" }).click();
+    await expect(overlay.locator(".rmp-still")).toBeAttached();
+    await drag([630, 150], [740, 230]);
+    await page.keyboard.press("Enter");
+    await expect(overlay.locator(".rmp-mark")).toHaveCount(5);
+    await comment("e");
+    const look = () => page.evaluate(() => {
+      const shadow = document.querySelector("#rmp-overlay-root")!.shadowRoot!;
+      const frames = [...shadow.querySelectorAll(".rmp-frame")].map((frame) => { const { x, y, width, height } = frame.getBoundingClientRect(); return [x, y, width, height]; });
+      const canvas = shadow.querySelector<HTMLCanvasElement>(".rmp-canvas")!, dpr = devicePixelRatio;
+      const { data, width, height } = canvas.getContext("2d")!.getImageData(0, 0, canvas.width, canvas.height);
+      let [l, t, r, b] = [Infinity, Infinity, -1, -1];
+      for (let i = 3; i < data.length; i += 4) if (data[i]! > 128) { const x = (i >> 2) % width, y = Math.floor((i >> 2) / width); l = Math.min(l, x); t = Math.min(t, y); r = Math.max(r, x); b = Math.max(b, y); }
+      const shown = [...shadow.querySelectorAll<HTMLElement>(".rmp-frame,.rmp-mark,.rmp-note")].filter((part) => {
+        const box = part.getBoundingClientRect();
+        return box.width && box.right > 0 && box.bottom > 0 && box.left < innerWidth && box.top < innerHeight;
+      }).length;
+      // The stroke is 4px wide at any zoom: its middle, not its edge, is what moves.
+      return { frames, ink: r < 0 ? null : [l / dpr + 2, t / dpr + 2, (r + 1) / dpr - 2, (b + 1) / dpr - 2], shown };
+    });
+    const move = async (x: number, y: number, k: number) => {
+      await page.evaluate(([x, y, k]) => { document.querySelector<HTMLElement>("#world")!.style.transform = `translate(${x}px,${y}px) scale(${k})`; }, [x, y, k]);
+      await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+      return look();
+    };
+    const start = await look();
+    expect(start.frames).toHaveLength(5);
+    expect(start.shown).toBe(15);
+    for (const [x, y, k] of [[150, 90, 1], [-60, -50, 1], [40, 30, 0.6], [-100, -80, 1.3], [0, 0, 1]] as const) {
+      const now = await move(x, y, k);
+      start.frames.forEach(([left, top, width, height], index) => {
+        [x + left! * k, y + top! * k, width! * k, height! * k].forEach((value, side) =>
+          expect(Math.abs(now.frames[index]![side]! - value), `注釈 ${index + 1} の ${"xywh"[side]} (${x},${y} ×${k})`).toBeLessThan(2));
+      });
+      start.ink!.forEach((value, side) => expect(Math.abs(now.ink![side]! - ((side % 2 ? y : x) + value * k)), `ペンの線 ${side} (${x},${y} ×${k})`).toBeLessThan(2));
+      if (k === 0.6) await rmp.screenshot(page, "26-map-zoomed-out");
+    }
+    for (const [x, y] of [[-1500, 0], [2500, 0], [0, -1500], [0, 2500]] as const) expect((await move(x, y, 1)).shown).toBe(0);
+    expect((await move(0, 0, 1)).shown).toBe(15);
+    // Pressing a mark while the map keeps moving still opens its comment.
+    await page.evaluate(() => { let n = 0; setInterval(() => { document.querySelector<HTMLElement>("#world")!.style.transform = `translate(${(n += 1) % 2}px,0)`; }, 16); });
+    await overlay.locator(".rmp-mark").nth(2).click({ force: true, delay: 120 });
+    await expect(overlay.locator("textarea")).toHaveValue("c");
+    await page.keyboard.press("Enter");
+    await rmp.send(page);
+    const annotations = await rmp.annotations(await rmp.ticket()) as { kind: string; comment?: string }[];
+    expect(annotations.map((a) => `${a.kind} ${a.comment}`)).toEqual(["dom a", "text b", "range c", "range d", "pen e"]);
+  });
+});
