@@ -1108,3 +1108,37 @@ test("26 スクロールせず絵ごと動くページ (地図) でも、要素�
     expect(annotations.map((a) => `${a.kind} ${a.comment}`)).toEqual(["dom a", "text b", "range c", "range d", "pen e"]);
   });
 });
+
+test("27 余白に付けた範囲は、近くの固定ヘッダーやスクロール枠の中身につられず、ページと一緒に動く", async () => {
+  await withFixture(1, async (rmp) => {
+    const page = await rmp.open();
+    await page.evaluate(() => {
+      document.body.innerHTML = `<header style="position:fixed;top:0;left:0;width:600px;height:50px;background:#ddd"><b style="display:block;width:600px">固定ヘッダー</b></header>
+        <main style="height:3000px"><div id="box" style="position:absolute;left:420px;top:220px;width:300px;height:200px;overflow:auto"><p style="height:900px;margin:0">枠の中の文字</p></div>
+        <p style="position:absolute;top:2600px">下の部品</p></main>`;
+    });
+    const range = async (from: number[], to: number[]) => {
+      await page.keyboard.down("Alt");
+      await page.mouse.move(from[0]!, from[1]!);
+      await page.mouse.down();
+      await page.mouse.move(to[0]!, to[1]!, { steps: 5 });
+      await page.mouse.up();
+      await page.keyboard.up("Alt");
+      await page.keyboard.type("x");
+      await page.keyboard.press("Enter");
+    };
+    await range([100, 70], [200, 110]); // below the header
+    await range([340, 300], [400, 360]); // beside the box
+    await range([480, 260], [560, 320]); // in the box
+    const tops = () => page.evaluate(() => [...document.querySelector("#rmp-overlay-root")!.shadowRoot!.querySelectorAll(".rmp-frame")].map((frame) => frame.getBoundingClientRect().y));
+    const moved = async (scroll: () => void) => {
+      const before = await tops();
+      await page.evaluate(scroll);
+      await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+      const after = await tops();
+      return before.map((top, index) => Math.round(top - after[index]!));
+    };
+    expect(await moved(() => { document.querySelector("#box")!.scrollTop = 40; })).toEqual([0, 0, 40]);
+    expect(await moved(() => scrollTo(0, 300))).toEqual([300, 300, 300]);
+  });
+});

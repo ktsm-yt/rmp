@@ -22,13 +22,12 @@ export class Anchor {
   private now: Frame;
   private constructor(private readonly element: Element, private readonly at: Frame, private readonly base: Rect) { this.now = at; }
 
-  /** The part under the middle of the rect, else under its edges, else the nearest one inside what is there. */
+  /** The part under the middle of the rect, else the nearest one that moves with that blank. */
   static under(rect: Rect, pick: (x: number, y: number) => Element | null): Anchor | null {
-    const left = rect.x - scrollOffset("x"), top = rect.y - scrollOffset("y");
-    const spots = [0.5, 0.05, 0.95].flatMap((h) => [0.5, 0.05, 0.95].map((w) => ({ x: left + rect.width * w, y: top + rect.height * h })));
-    const hits = spots.map(({ x, y }) => pick(x, y));
-    // A blank spot hits a container, which may be the window the content moves in: only a part of the content is sure to move.
-    const element = hits.find((hit) => hit && isPart(hit)) ?? nearest(hits[0] ?? document.body, spots[0]!) ?? hits[0];
+    const middle = { x: rect.x - scrollOffset("x") + rect.width / 2, y: rect.y - scrollOffset("y") + rect.height / 2 };
+    const hit = pick(middle.x, middle.y);
+    // A blank hits a container, which may be the window the content moves in: only a part of the content is sure to move.
+    const element = hit && isPart(hit) ? hit : nearest(hit ?? document.body, middle) ?? hit;
     const at = element && frameOf(element);
     return at ? new Anchor(element, at, { ...rect }) : null;
   }
@@ -49,6 +48,15 @@ function isPart(element: Element): boolean {
   return !element.firstElementChild || [...element.childNodes].some((node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim());
 }
 
+// A fixed header or the inside of a scrolling box moves apart from the blank around it.
+function movesApart(element: Element, root: Element): boolean {
+  for (let at: Element | null = element; at && at !== root; at = at.parentElement) {
+    const { position, overflowX, overflowY } = getComputedStyle(at);
+    if (position === "fixed" || position === "sticky" || [overflowX, overflowY].some((value) => value === "auto" || value === "scroll")) return true;
+  }
+  return false;
+}
+
 // ponytail: the first 5000 parts; a bigger page falls back to the container.
 function nearest(root: Element, { x, y }: Point): Element | null {
   let best: Element | null = null, distance = Infinity, seen = 0;
@@ -58,7 +66,7 @@ function nearest(root: Element, { x, y }: Point): Element | null {
     const box = element.getBoundingClientRect();
     if (!box.width || !box.height) continue;
     const away = Math.hypot(Math.max(box.left - x, 0, x - box.right), Math.max(box.top - y, 0, y - box.bottom));
-    if (away < distance && getComputedStyle(element).visibility !== "hidden") { best = element; distance = away; }
+    if (away < distance && getComputedStyle(element).visibility !== "hidden" && !movesApart(element, root)) { best = element; distance = away; }
   }
   return best;
 }
