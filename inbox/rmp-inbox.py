@@ -35,7 +35,8 @@ cap). read prints them under the send, so Claude can answer "where is X?" with a
 Hooks read the hook JSON on stdin (session_id, cwd) and keep a registry
 ~/.rmp-inbox/sessions/<sid>.json. GET /sessions lists a registered session with delivery "next"
 (its next prompt mentions the send), any other with "manual" (the user pastes /rmp <ticket>).
-A headless `claude -p` is not listed: it has no input box to deliver to.
+A headless `claude -p` is not listed: it has no input box to deliver to. Neither is a session Orca itself
+runs (its Bots and dispatched workers).
 When rmv (127.0.0.1:4310) is running, GET /sessions lays its own GET /sessions over that list:
 label (herdr pane name), head (first 40 chars of the latest reply) and deliverable
 (rmv can reach its terminal). rmv only adds to sessions already listed here, never adds a session,
@@ -318,6 +319,9 @@ def _entry_alive(entry, procs):
     return pid is not None and pid in procs and bool(entry["procStart"]) and procs[pid][1] == entry["procStart"]
 
 
+HEADLESS_ENTRYPOINTS = ("sdk-cli", "orca")
+
+
 def session_view(procs, files=None):
     """(listed, held): the one liveness rule shared by GET /sessions and read's ended check.
 
@@ -331,6 +335,8 @@ def session_view(procs, files=None):
       never listed, from the file or from the registry: its file says kind "interactive" as well, but
       it has no input box, and RMP joins the browser to Claude windows. read still counts it as alive
       while it runs (ended_targets): a send to it stays unread until the process exits,
+    - so is a session Orca itself runs (entrypoint "orca": its Bots and dispatched workers, driven through
+      the SDK). A claude the user types into in an Orca terminal says "cli" and stays listed,
     - when one Claude process shows up under two sids, the sid its hook reported last wins: the
       hooks run on every SessionStart (/clear, /resume) and prompt, so they follow the conversation.
     Each item carries "cwds" (the (b) cwd and the hook's cwd) for the cwd guess.
@@ -346,8 +352,8 @@ def session_view(procs, files=None):
             files = []
     from_files = _live_from(files, procs)
     # ponytail: entrypoint is not a public format; if Claude renames it, headless sessions show up again
-    # (as before this check). Then fall back to HEADLESS_RE on the plain ps command line, as claude_panes does.
-    headless = {int(f.stem) for f, data in files if isinstance(data, dict) and data.get("entrypoint") == "sdk-cli"}
+    # (as before this check). For sdk-cli, then fall back to HEADLESS_RE on the plain ps command line, as claude_panes does.
+    headless = {int(f.stem) for f, data in files if isinstance(data, dict) and data.get("entrypoint") in HEADLESS_ENTRYPOINTS}
     sessions = {sid: {**s, "cwds": [s["cwd"]] if s["cwd"] else [], "delivery": "manual"}
                 for sid, s in from_files.items() if s["pid"] not in headless}
     entries = registry_entries()

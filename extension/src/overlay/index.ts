@@ -4,6 +4,7 @@ import {
   DraftDebouncer, cueText, documentRect, keyAction, manualToast, newAnnotation, nextMode, rangeText, scrollOffset,
   selectMark, selectorFor, startDeliveryWatch, startPointWatch, type Mode,
 } from "./logic";
+import { Anchor } from "./anchor";
 import { collectParts, hidePoint, hidePointNotice, isPointed, pointHost, showPoint, showPointNotice } from "./point";
 
 type SendReply = { kind: "pick"; list: TargetList } |
@@ -52,6 +53,13 @@ class Overlay {
   private readonly layer = document.createElement("div");
   private readonly canvas = document.createElement("canvas");
   private readonly elements = new Map<Annotation, Element>();
+  // Marks with no element of their own: selected text by its characters, the rest by the part they were drawn over.
+  private readonly ranges = new Map<Annotation, Range>();
+  private readonly anchors = new Map<Annotation, Anchor>();
+  // What renderMarks drew, so a moving page only moves it (built again every frame, a click on a mark would be lost).
+  private drawn: { annotation: Annotation; frame: HTMLElement; mark: HTMLElement; note: HTMLElement | null }[] = [];
+  private raf = 0;
+  private seen = "";
   private annotations: Annotation[] = [];
   private selected: number[] = [];
   private editor: HTMLTextAreaElement | null = null;
@@ -207,9 +215,6 @@ class Overlay {
     this.canvas.addEventListener("pointermove", (event) => this.drawPen(event));
     this.canvas.addEventListener("pointerup", (event) => this.endShape(event));
     this.canvas.addEventListener("pointercancel", (event) => this.endShape(event));
-    // The page is a still while the pen is on; scrolling it would slide the strokes off the picture.
-    // ponytail: wheel only; arrow keys / Space can still scroll the page under the still.
-    this.canvas.addEventListener("wheel", (event) => event.preventDefault(), { passive: false });
     // Inside a dialog our presses would reach it, and a dialog that closes on a click outside its box would close on
     // the bar (drawn outside the box). Our own handlers sit below the host or capture on document / window.
     for (const type of ["pointerdown", "pointerup", "mousedown", "mouseup", "click"]) this.host.addEventListener(type, (event) => event.stopPropagation());
@@ -272,11 +277,14 @@ class Overlay {
     this.active = false;
     this.mode = "element";
     this.canvas.classList.remove("pen");
+    this.holdWheel(false);
     this.unfreeze();
     this.saveComment(true);
     this.annotations = [];
     this.selected = [];
     this.elements.clear();
+    this.ranges.clear();
+    this.anchors.clear();
     this.shapes = [];
     this.inks.clear();
     this.drawing = null;
@@ -295,6 +303,8 @@ class Overlay {
     this.annotations = [];
     this.selected = [];
     this.elements.clear();
+    this.ranges.clear();
+    this.anchors.clear();
     this.shapes = [];
     this.inks.clear();
     this.drawing = null;
@@ -488,8 +498,9 @@ class Overlay {
   private addSelection(extend: boolean): boolean {
     const selection = getSelection();
     if (!selection?.rangeCount || !selection.toString().trim()) return false;
-    const rect = documentRect(selection.getRangeAt(0).getBoundingClientRect());
-    this.add({ kind: "text", text: selection.toString().trim().slice(0, 1000), imageRect: rect, displayRect: { ...rect } }, extend);
+    const range = selection.getRangeAt(0).cloneRange(), rect = documentRect(range.getBoundingClientRect());
+    const annotation = this.add({ kind: "text", text: selection.toString().trim().slice(0, 1000), imageRect: rect, displayRect: { ...rect } }, extend);
+    if (annotation && !this.paged()) this.ranges.set(annotation, range);
     selection.removeAllRanges();
     return true;
   }
@@ -531,6 +542,16 @@ class Overlay {
     else if (action === "send") { this.saveComment(true); this.run(() => this.send()); }
   }
 
+  // The page is a still while the pen is on; scrolling it would slide the strokes off the picture.
+  // ponytail: wheel only; arrow keys / Space can still scroll the page under the still.
+  // Held only in pen mode: a blocking wheel handler on the window-sized canvas made Chrome scroll the page's fixed
+  // header and our bar away with the page on some sites (kirara), even with the canvas at pointer-events:none.
+  private readonly stopWheel = (event: WheelEvent) => event.preventDefault();
+  private holdWheel(on: boolean): void {
+    if (on) this.canvas.addEventListener("wheel", this.stopWheel, { passive: false });
+    else this.canvas.removeEventListener("wheel", this.stopWheel);
+  }
+
   private setMode(mode: Mode): void {
     // Leaving the pen keeps what was drawn as a mark.
     if (this.mode === "pen" && mode !== "pen") this.run(async () => { await this.finishPen(); this.unfreeze(); });
@@ -540,6 +561,7 @@ class Overlay {
     this.hideHover();
     this.renderToolbar();
     this.canvas.classList.toggle("pen", mode === "pen");
+    this.holdWheel(mode === "pen");
     // After the pen bar is up, so the screenshot hides it too.
     if (entering) this.run(() => this.freeze());
   }
@@ -550,6 +572,8 @@ class Overlay {
     this.saveComment(!extend);
     const annotation = newAnnotation(this.annotations, value);
     this.annotations.push(annotation);
+    const anchor = annotation.displayRect && !this.paged() && Anchor.under(annotation.displayRect, (x, y) => this.targetAt(x, y, false));
+    if (anchor) this.anchors.set(annotation, anchor);
     this.selected = selectMark(this.selected, annotation.displayNumber, extend);
     if (extend && this.editor) this.updateComment();
     else this.openComment(annotation);
@@ -558,25 +582,70 @@ class Overlay {
     return annotation;
   }
 
+  // The PDF viewer moves its own marks (remap), and drops the text of the pages it scrolled past.
+  private paged(): boolean { return Boolean((window as Window & { __rmpScrollRoot?: Element }).__rmpScrollRoot); }
+
+  private rectOf(annotation: Annotation): Rect | undefined {
+    const element = this.elements.get(annotation);
+    if (element) return element.isConnected ? documentRect(element.getBoundingClientRect()) : annotation.imageRect;
+    const range = this.ranges.get(annotation), anchor = this.anchors.get(annotation);
+    // Text the page drew again has no characters left to ask (the range collapsed).
+    const box = range && !range.collapsed ? range.getBoundingClientRect() : null;
+    if (box && (box.width || box.height)) annotation.displayRect = documentRect(box);
+    else if (anchor) { anchor.read(); annotation.displayRect = anchor.rect(); }
+    return annotation.displayRect ?? annotation.imageRect;
+  }
+
+  // A page that moves by a transform (a map, a canvas) scrolls nothing, so the marks are looked at every frame.
+  // Not under the 📷 still: the picture stays, and so do the marks on it.
+  private readonly follow = (): void => {
+    this.raf = 0;
+    if (!this.active || !this.annotations.length) return;
+    if (this.mode !== "pen") {
+      const rects = this.drawn.map(({ annotation }) => this.rectOf(annotation));
+      if (this.where(rects) !== this.seen) { this.placeMarks(rects); if (this.inks.size) this.renderStrokes(); this.positionEditor(); }
+    }
+    this.raf = requestAnimationFrame(this.follow);
+  };
+  private where(rects: (Rect | undefined)[]): string {
+    const sx = scrollOffset("x"), sy = scrollOffset("y");
+    return rects.map((rect) => rect && [rect.x - sx, rect.y - sy, rect.width, rect.height].map((v) => v.toFixed(1)).join()).join(";");
+  }
+
+  private placeMarks(rects: (Rect | undefined)[]): void {
+    this.seen = this.where(rects);
+    this.drawn.forEach(({ frame, mark, note }, index) => {
+      const rect = rects[index]!;
+      const left = rect.x - scrollOffset("x"), top = rect.y - scrollOffset("y"), bottom = top + rect.height;
+      const empty = !rect.width && !rect.height;
+      // Out of the window the badge and the comment, which are kept beside the mark or inside the left edge, must not stay behind alone.
+      const out = empty || left + rect.width < 0 || left > innerWidth || bottom < 0 || top > innerHeight;
+      frame.style.display = empty ? "none" : "";
+      mark.style.display = empty || left > innerWidth ? "none" : "";
+      if (note) note.style.display = out ? "none" : "";
+      position(frame, rect);
+      // The badge sits in the left margin so it does not cover the first character.
+      mark.style.left = `${left >= 30 ? left - 30 : left + 3}px`;
+      mark.style.top = `${top + (left >= 30 ? 0 : 3)}px`;
+      if (note) { note.style.left = `${Math.max(8, left)}px`; note.style.top = `${bottom + 4}px`; }
+    });
+  }
+
   private renderMarks(): void {
     this.layer.replaceChildren();
+    this.drawn = [];
+    const rects: Rect[] = [];
     for (const annotation of this.annotations) {
-      const element = this.elements.get(annotation);
-      const rect = element?.isConnected ? documentRect(element.getBoundingClientRect()) : annotation.displayRect ?? annotation.imageRect;
+      const rect = this.rectOf(annotation);
       if (!rect) continue;
       const on = this.selected.includes(annotation.displayNumber);
       const frame = document.createElement("div");
       frame.className = on ? "rmp-frame on" : "rmp-frame";
-      position(frame, rect);
       const mark = document.createElement("button");
       mark.className = "rmp-mark";
       mark.textContent = String(annotation.displayNumber);
       mark.setAttribute("aria-label", `注釈 ${annotation.displayNumber} のコメント`);
       mark.setAttribute("aria-pressed", String(on));
-      // The badge sits in the left margin so it does not cover the first character.
-      const left = rect.x - scrollOffset("x");
-      mark.style.left = `${left >= 30 ? left - 30 : left + 3}px`;
-      mark.style.top = `${rect.y - scrollOffset("y") + (left >= 30 ? 0 : 3)}px`;
       mark.onclick = (event) => {
         if (!event.isTrusted || this.sending) return;
         this.focusMark(annotation, event.shiftKey);
@@ -584,17 +653,20 @@ class Overlay {
       this.layer.append(frame, mark);
       // The comment's first line under the mark, so the marks can be read without opening each one.
       const [line, ...more] = annotation.comment?.trim().split("\n") ?? [];
+      let note: HTMLElement | null = null;
       if (line && !(on && this.editor)) {
-        const note = document.createElement("button");
+        note = document.createElement("button");
         note.className = "rmp-note";
         note.textContent = more.length ? `${line} …` : line;
         note.title = annotation.comment!.trim();
-        note.style.left = `${Math.max(8, left)}px`;
-        note.style.top = `${rect.y + rect.height - scrollOffset("y") + 4}px`;
         note.onclick = mark.onclick;
         this.layer.append(note);
       }
+      this.drawn.push({ annotation, frame, mark, note });
+      rects.push(rect);
     }
+    this.placeMarks(rects);
+    if (!this.raf && this.active && this.annotations.length) this.raf = requestAnimationFrame(this.follow);
     const count = this.shadow.querySelector(".rmp-count");
     if (count) count.textContent = `注釈 ${this.annotations.length}`;
     this.positionEditor();
@@ -652,8 +724,7 @@ class Overlay {
     this.card.setAttribute("aria-label", `注釈 ${numbers} のコメント欄`);
     if (this.cardMoved) return;
     const annotation = this.annotations.find((a) => a.displayNumber === this.selected[0]);
-    const element = annotation && this.elements.get(annotation);
-    const rect = element?.isConnected ? documentRect(element.getBoundingClientRect()) : annotation?.displayRect ?? annotation?.imageRect;
+    const rect = annotation && this.rectOf(annotation);
     const x = (rect?.x ?? scrollOffset("x")) - scrollOffset("x"), top = (rect?.y ?? scrollOffset("y")) - scrollOffset("y"), bottom = top + (rect?.height ?? 0);
     const height = this.card.offsetHeight || 170;
     // Below the mark when it fits, else above it, else pinned inside the window.
@@ -690,7 +761,9 @@ class Overlay {
     const gone = new Set(this.selected);
     this.editor = null; this.card?.remove(); this.card = null;
     for (const annotation of this.annotations) {
-      if (gone.has(annotation.displayNumber)) { this.elements.delete(annotation); this.inks.delete(annotation); }
+      if (gone.has(annotation.displayNumber)) {
+        for (const kept of [this.elements, this.ranges, this.anchors, this.inks]) kept.delete(annotation);
+      }
     }
     this.annotations = this.annotations.filter((a) => !gone.has(a.displayNumber));
     this.annotations.forEach((a, index) => { a.displayNumber = index + 1; });
@@ -890,6 +963,8 @@ class Overlay {
       this.annotations = [];
       this.selected = [];
       this.elements.clear();
+      this.ranges.clear();
+      this.anchors.clear();
       this.inks.clear();
       this.renderMarks();
       this.renderStrokes();
@@ -1094,8 +1169,12 @@ class Overlay {
     ctx.lineWidth = 4;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
-    const shapes = [...[...this.inks.values()].flat(), ...this.shapes, ...(this.drawing ? [this.drawing] : [])];
-    for (const shape of shapes) {
+    const inks = [...this.inks].flatMap(([annotation, shapes]) => {
+      const anchor = this.anchors.get(annotation);
+      anchor?.read();
+      return anchor ? shapes.map((shape) => ({ ...shape, points: shape.points.map((p) => anchor.point(p)) })) : shapes;
+    });
+    for (const shape of [...inks, ...this.shapes, ...(this.drawing ? [this.drawing] : [])]) {
       const [a, b] = [shape.points[0], shape.points.at(-1)].map((p) => p && { x: p.x - sx, y: p.y - sy });
       if (!a || !b) continue;
       ctx.strokeStyle = ctx.fillStyle = shape.color;
