@@ -88,6 +88,7 @@ NEW, READ, IMAGES, DRAFTS = ROOT / "new", ROOT / "read", ROOT / "images", ROOT /
 POINTS = ROOT / "points"  # <ticket>.json: the latest `point` for that send
 MAX_PARTS = 1000  # the extension caps its list lower (overlay/point.ts); this only bounds what is stored
 REGISTRY = ROOT / "sessions"  # <sid>.json written by the hooks
+CODEX = ROOT / "codex"  # <sid>: a Codex conversation rmv listed (its label); never a Claude session
 CLAUDE_SESSIONS = Path(os.environ.get("RMP_CLAUDE_SESSIONS") or Path.home() / ".claude" / "sessions")
 RMV_PORT = 4310
 RMV_URL = (os.environ.get("RMP_RMV_URL") or f"http://127.0.0.1:{RMV_PORT}").rstrip("/")
@@ -261,7 +262,10 @@ def ended_targets(sids, me=""):
         return set(), sids
     opaque = any(not sid and state not in ("dead", "reused") for sid, _, state in states)
     ended, unsure = set(), set()
+    codex = codex_sids()
     for target in sids:
+        if target in codex:
+            continue  # a Codex conversation's: reads it by ticket; never counted as an ended Claude session
         named = [state for sid, _, state in states if sid == target]
         if target in listed or "live" in named:
             continue  # alive: GET /sessions offers it, or its (b) file vouches for it
@@ -399,7 +403,28 @@ def listed_sessions(procs):
     return session_view(procs)[0]
 
 
+def codex_sids():
+    try:
+        return {f.name for f in CODEX.iterdir() if UUID_RE.match(f.name)}
+    except OSError:
+        return set()
+
+
+def remember_codex(sid, label):
+    """Mark sid as a Codex conversation (kept: its unread sends must stay out of Claude's /rmp)."""
+    try:
+        CODEX.mkdir(parents=True, exist_ok=True)
+        (CODEX / sid).write_text(label[:200], encoding="utf-8")
+    except OSError:
+        pass
+
+
 def session_label(sid):
+    if sid in codex_sids():
+        try:
+            return (CODEX / sid).read_text(encoding="utf-8")[:200] or "Codex"
+        except OSError:
+            return "Codex"
     info = live_sessions().get(sid)
     if info and info["name"]:
         return info["name"]
@@ -552,12 +577,14 @@ def rmv_sessions():
         sid = e.get("sid") if isinstance(e, dict) else None
         if not isinstance(sid, str) or not UUID_RE.match(sid.lower()) or sid.lower() in out:
             continue
-        label, head = e.get("label"), e.get("head")
+        label, head, cwd = e.get("label"), e.get("head"), e.get("cwd")
         out[sid.lower()] = {
             "label": label[:200] if isinstance(label, str) else "",
             "head": head[:200] if isinstance(head, str) else "",
             "deliverable": checked and e.get("live") is True and e.get("deliverable") is True,
         }
+        if e.get("agent") == "codex":  # rmv confirmed this Codex conversation in its pane (dedicated App Server)
+            out[sid.lower()].update(codex=True, cwd=cwd[:1000] if isinstance(cwd, str) else "")
     return out
 
 
@@ -894,6 +921,17 @@ def sessions_for(url, last=""):
         item["deliverable"] = bool(extra.get("deliverable"))
         item["direct"] = bool(pane.get("direct"))  # the inbox itself may type into its herdr pane (POST /deliver)
         items.append({**item, "match": match.get(s["sid"]), "last": s["sid"] == last})
+    # Codex conversations come only from rmv (it checks the pane's own App Server), after the Claude ones.
+    # Not part of the guess or the default: picking one is the user's choice.
+    for sid, extra in over.items():
+        if not extra.get("codex") or sid in sessions:
+            continue
+        label = extra.get("label") or "Codex"
+        remember_codex(sid, label)
+        items.append({"sid": sid, "name": label, "status": "", "updatedAt": 0, "cwd": extra.get("cwd", ""),
+                      "delivery": "manual", "label": label, "head": extra.get("head", ""),
+                      "deliverable": bool(extra.get("deliverable")), "direct": False, "runtime": "codex",
+                      "match": None, "last": sid == last})
     return {"sessions": items, "default": default, "defaultReason": default_reason}
 
 

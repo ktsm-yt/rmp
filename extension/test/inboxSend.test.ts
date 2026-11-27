@@ -611,6 +611,21 @@ describe("rmv /ext/deliver (今すぐ)", () => {
     }
   });
 
+  it("treats rmv's 504 (codex queue did not answer) as not known, like a cut wait", async () => {
+    const fetchImpl = vi.fn(async () => new Response("codex queue: 登録できたか不明", { status: 504 }));
+    expect(await deliverViaRmv(SID, T, { fetchImpl })).toEqual({ delivered: false, reason: "rmv_timeout" });
+  });
+
+  it("keeps runtime codex from the inbox's list and nothing else", async () => {
+    const fetchImpl = vi.fn(async () => reply(200, {
+      sessions: [{ sid: A, cwd: "/a", runtime: "codex", deliverable: true }, { sid: B, cwd: "/b", runtime: "other" }],
+      default: null, defaultReason: null,
+    }));
+    const result = await fetchInboxSessions("file:///a/x.html", "", { fetchImpl });
+    if (!result.available) throw new Error("unavailable");
+    expect(result.sessions.map((s) => s.runtime)).toEqual(["codex", undefined]);
+  });
+
   it("says a cut wait is not known, not 'rmv is down': rmv may still type it", async () => {
     const fetchImpl = vi.fn(
       (_url: string | URL | Request, init?: RequestInit) =>

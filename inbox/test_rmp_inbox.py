@@ -836,6 +836,56 @@ class RmvOverlay(SessionsList):
         self.assertIs(got[ME]["deliverable"], False)
 
 
+class CodexFromRmv(Served):
+    """Codex conversations that rmv confirmed in their herdr pane (agent: "codex" in rmv's /sessions)."""
+
+    def setUp(self):
+        self.rmv = FakeRmv()
+        super().setUp()
+
+    def tearDown(self):
+        super().tearDown()
+        self.rmv.close()
+
+    def env(self, **extra):
+        return super().env(**{"RMP_RMV_URL": self.rmv.url, **extra})
+
+    CODEX = "01a1edc0-a35a-7e11-ac64-09ebd9ae1a2c"
+
+    def codex_row(self, **over):
+        return rmv_row(self.CODEX, agent="codex", label="Codex · rmp 作業", head="", cwd="/x/rmp", **over)
+
+    def test_rmv_codex_conversation_is_listed_after_the_claude_ones(self):
+        self.rmv.body = [rmv_row(ME), self.codex_row()]
+        got, body = self.listing("file:///x/rmp/page.html")
+        row = got[self.CODEX]
+        self.assertEqual([s["sid"] for s in body["sessions"]][-1], self.CODEX)
+        self.assertEqual((row["runtime"], row["label"], row["cwd"], row["deliverable"], row["direct"], row["delivery"]),
+                         ("codex", "Codex · rmp 作業", "/x/rmp", True, False, "manual"))
+        self.assertIsNone(row["match"])  # not guessed: picking a Codex conversation is the user's choice
+        self.assertNotEqual(body["default"], self.CODEX)
+        self.assertEqual((self.root / "codex" / self.CODEX).read_text(), "Codex · rmp 作業")
+
+    def test_rmv_that_could_not_check_does_not_make_codex_deliverable(self):
+        self.rmv.body, self.rmv.live = [self.codex_row()], "unknown"
+        got, _ = self.listing()
+        self.assertIs(got[self.CODEX]["deliverable"], False)
+
+    def test_a_row_without_agent_codex_is_still_not_added(self):
+        self.rmv.body = [rmv_row(self.CODEX)]
+        got, _ = self.listing()
+        self.assertNotIn(self.CODEX, got)
+
+    def test_claude_rmp_leaves_codex_sends_unread(self):
+        self.rmv.body = [self.codex_row()]
+        self.listing()  # rmv lists it once: the inbox remembers it is Codex's
+        ticket = self.put(self.CODEX)
+        out = self.read()
+        self.assertFalse(self.is_read(ticket), out)
+        self.assertIn(ticket, self.read("--ticket", ticket))
+        self.assertTrue(self.is_read(ticket))
+
+
 class InstallHooks(unittest.TestCase):
     """install.sh hooks: the printed command runs under /bin/sh for any folder name, whichever bash
     prints it (/bin/bash is 3.2 on macOS; bash 4+ escapes ${x//pat/rep} differently)."""

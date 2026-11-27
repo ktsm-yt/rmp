@@ -1,7 +1,7 @@
 import type { InboxSendResult, TargetList } from "../inboxSend";
 import type { Annotation, PointResult, Rect } from "../types";
 import {
-  DraftDebouncer, documentRect, keyAction, manualToast, newAnnotation, nextMode, rangeText, scrollOffset,
+  DraftDebouncer, cueText, documentRect, keyAction, manualToast, newAnnotation, nextMode, rangeText, scrollOffset,
   selectMark, selectorFor, startDeliveryWatch, startPointWatch, type Mode,
 } from "./logic";
 import { Anchor } from "./anchor";
@@ -969,13 +969,15 @@ class Overlay {
       this.renderMarks();
       this.renderStrokes();
       const ticket = reply.result.ticket;
-      if (reply.route === "manual" && ticket) await this.copyText(`/rmp ${ticket}`, manualToast(reply.result.deliver));
+      const runtime = reply.result.runtime;
+      if (reply.route === "manual" && ticket) await this.copyText(cueText(ticket, runtime), manualToast(reply.result.deliver));
+      else if (reply.route === "now" && reply.result.via === "codex") this.toast("今すぐ: Codex のキューに積みました");
       else this.toast(reply.route === "now" ? "今すぐ: 届けました" : reply.route === "next" ?
         "次の入力で知らせます" : reply.route === "pending" ? "配送の返事を待っています。60秒後に未読なら手で届けられます" : "受信箱に保存しました");
       await this.drafts.clear();
       if (ticket && this.active) {
         const stop = startDeliveryWatch(ticket, reply.route, (value) => request({ type: "rmp:status", ticket: value }),
-          () => this.toast("読まれた"), (text, success) => this.copyText(text, success));
+          () => this.toast("読まれた"), (text, success) => this.copyText(text, success), window, runtime);
         this.watches.add(stop);
       }
       if (ticket && parts) {

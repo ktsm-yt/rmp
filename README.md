@@ -120,6 +120,15 @@ RMV_EXT_ORIGINS=chrome-extension://kgdkanfbaiakfcncpfdllehhenoplheg
 
 Firefox / Zen から使う時は、カンマで続けて `moz-extension://e9f3dda0-0bd4-4cb6-b23c-243a430e4c3c` も足します。
 
+### Codex の会話に送る (試作・rmv 経由)
+
+rmv で herdr の Codex のペインに専用の Codex App Server を割り当てていると ([rmv の『Codex の返事を載せて赤ペンを返す』](https://github.com/ktsm-yt/rmv/blob/main/docs/config.md))、rmv がそのペインで今開いている会話を確かめられた時だけ、宛先の一覧に『Codex · <ペイン名>』が出ます。rmp 側の設定は要りません。
+
+- 『今すぐ』を選ぶと、rmv が送る直前に会話をもう一度確かめ、「`~/.claude/skills/rmp/SKILL.md` の手順でチケットを読む」という知らせを Codex のキューに積みます (`codex queue`)。Codex は手が空いた時にそれを読みます
+- 承認待ちの時、会話が変わった時、キューに積めなかった時は『手で』になり、同じ知らせの文がコピーされます。Codex の入力欄に貼ってください。積めたか分からない時は 60 秒待って、未読ならコピーします
+- Codex が読むのは受信箱の `read --ticket` です。rmp スキルの手順書は `inbox/install.sh` が入れるものをそのまま使うので、Codex 側の設定は要りません
+- Codex 宛ての未読は、Claude Code の `/rmp` (引数なし) では読まれません
+
 ## 赤入れする
 
 拡張のボタン、または `⌘⇧.` (Mac 以外は `Ctrl+Shift+.`) で注釈モードを出し入れします。rmv のサイドパネルは `⌘⇧,` (Mac 以外は `Ctrl+Shift+,`) で開閉します。引っ込めている間はページを普通に操作でき、もう一度出すと送る前の注釈がそのまま戻ります (同じページにいる間だけ。再読み込みや別のページへの移動で消えます)。キーは `chrome://extensions/shortcuts` で変更できます。『タブ ID』は同画面で自分で割り当てるか、ツールバーの『タブ ID』ボタンを使います。

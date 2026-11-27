@@ -224,6 +224,18 @@ describe("rmv first, then the inbox's own herdr delivery", () => {
     expect(calls).toEqual(["inbox"]);
   });
 
+  it("a Codex conversation: rmv queues it, the inbox never types, and the result says codex", async () => {
+    const { pending, calls } = run({ status: 200, body: '{"ok":true,"via":"codex"}' }, { deliverable: true, runtime: "codex" });
+    expect(await pending).toMatchObject({ route: "now", result: { delivered: true, via: "codex", runtime: "codex" } });
+    expect(calls).toEqual(["rmv"]);
+  });
+
+  it("a Codex conversation rmv refuses goes to 手で with the Codex cue", async () => {
+    const { pending, calls } = run({ status: 502, body: "codex queue exit 3: refused" }, { deliverable: true, runtime: "codex" });
+    expect(await pending).toMatchObject({ route: "manual", result: { delivered: false, deliver: "rmv_error", runtime: "codex" } });
+    expect(calls).toEqual(["rmv"]);
+  });
+
   it("not direct and rmv off: nobody types", async () => {
     const { pending, calls } = run("off", { direct: false });
     expect(await pending).toMatchObject({ route: "next", result: { delivered: false } });
