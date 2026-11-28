@@ -1142,3 +1142,49 @@ test("27 余白に付けた範囲は、近くの固定ヘッダーやスクロ�
     expect(await moved(() => scrollTo(0, 300))).toEqual([300, 300, 300]);
   });
 });
+
+test("28 PDF のリンクの文字も、押すと段落の印になり、なぞるとその文字の印とコメント欄が出る", async () => {
+  await withFixture(1, async (rmp) => {
+    const page = await rmp.open();
+    // Printed from HTML by Chromium: the <a> becomes a link annotation, which pdf.js lays over the text as a transparent <a>.
+    const maker = await page.context().newPage();
+    await maker.setContent(`<body style="margin:0;padding:24px;width:480px;font:14px/1.4 sans-serif">
+      <p style="margin:0 0 12px">出典の一行です。</p>
+      <p style="margin:0"><a href="https://github.com/ktsm-yt/rmp" style="color:#06c">github.com/ktsm-yt/rmp-link-text</a></p></body>`);
+    const pdf = await maker.pdf({ width: "560px", height: "300px" });
+    await maker.close();
+    const viewer = await page.context().newPage();
+    await viewer.goto(`chrome-extension://${await rmp.extensionId()}/pdfjs/web/viewer.html`);
+    await viewer.locator("#fileInput").setInputFiles({ name: "link.pdf", mimeType: "application/pdf", buffer: pdf });
+    const overlay = viewer.locator("#rmp-overlay-root");
+    const span = viewer.locator(".textLayer span", { hasText: /rmp-link-text/ });
+    await expect(span).toHaveCount(1);
+    await expect(viewer.locator(".annotationLayer .linkAnnotation a")).toHaveCount(1);
+    const box = (await span.boundingBox())!, middle = box.y + box.height / 2;
+    // The link's own box is what the pointer hits first, as in the documents this was reported on.
+    expect(await viewer.evaluate(([x, y]) => document.elementFromPoint(x!, y!)?.closest(".annotationLayer") !== null, [box.x + box.width / 2, middle])).toBe(true);
+    await viewer.mouse.move(box.x + box.width / 2, middle);
+    await expect(overlay.locator(".rmp-hover")).toBeVisible();
+    await viewer.mouse.click(box.x + box.width / 2, middle);
+    await expect(overlay.locator(".rmp-mark")).toHaveCount(1);
+    await overlay.locator("textarea").fill("押した");
+    await overlay.getByRole("button", { name: "保存", exact: true }).click();
+    // The click marked the text and did not follow the link.
+    expect(viewer.url()).toContain("/pdfjs/web/viewer.html");
+    await viewer.mouse.move(box.x + 2, middle);
+    await viewer.mouse.down();
+    await viewer.mouse.move(box.x + box.width / 2, middle, { steps: 5 });
+    await viewer.mouse.up();
+    await expect(overlay.locator(".rmp-mark")).toHaveCount(2);
+    await expect(overlay.locator("textarea")).toBeFocused();
+    await overlay.locator("textarea").fill("なぞった");
+    await rmp.screenshot(viewer, "28-pdf-link");
+    await rmp.send(viewer);
+    const marks = await rmp.annotations(await rmp.ticket()) as Array<{ kind: string; text?: string }>;
+    expect(marks.map((mark) => mark.kind)).toEqual(["text", "text"]);
+    expect(marks[0]!.text).toBe("github.com/ktsm-yt/rmp-link-text");
+    // The drag took the characters from the start of the link to about its middle.
+    expect(marks[1]!.text).toMatch(/^github\.com\/ktsm/);
+    expect(marks[1]!.text!.length).toBeLessThan("github.com/ktsm-yt/rmp-link-text".length);
+  });
+});
