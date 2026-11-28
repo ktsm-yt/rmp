@@ -71,7 +71,7 @@ class Overlay {
   private dragged = false;
   // The press was on a character (and ⌥ was not held), so the drag selects text from here instead of drawing a range.
   // The selection is set by hand: the browser's own would follow Shift into the open comment and steal its focus.
-  private selectFrom: CaretPosition | null = null;
+  private selectFrom: Caret | null = null;
   // The first press after a 📷 mark only closes its still-open comment (a stray click made an element mark).
   private leftPen = false;
   // Where the pen bar was dragged to (it is built again on every render); null keeps it at the bottom centre.
@@ -328,8 +328,9 @@ class Overlay {
   private point(event: MouseEvent): Point { return { x: event.clientX + scrollOffset("x"), y: event.clientY + scrollOffset("y") }; }
 
   private targetAt(x: number, y: number, smallest: boolean): Element | null {
+    // pdf.js lays a link's transparent box over its text; the text under it is the target.
     const targets = document.elementsFromPoint(x, y).filter((element) => element !== this.host && element !== pointHost &&
-      !this.host.contains(element) && element !== document.documentElement && element !== document.body);
+      !this.host.contains(element) && element !== document.documentElement && element !== document.body && !element.closest(PDF_LINKS));
     if (!smallest) {
       const top = targets[0];
       if (!top) return null;
@@ -413,7 +414,7 @@ class Overlay {
     const start = this.dragStart, point = this.point(event);
     if (start && !this.dragging && Math.hypot(point.x - start.x, point.y - start.y) >= 4) this.dragging = true;
     if (this.mode === "element" && start && this.dragging) {
-      const from = this.selectFrom, to = from && document.caretPositionFromPoint(event.clientX, event.clientY);
+      const from = this.selectFrom, to = from && caretAt(event.clientX, event.clientY);
       if (from && to) getSelection()?.setBaseAndExtent(from.offsetNode, from.offset, to.offsetNode, to.offset);
       if (from) this.hideHover();
       else this.showHover(rectBetween(start, point));
@@ -1235,9 +1236,27 @@ function position(element: HTMLElement, rect: Rect): void {
 function visibleText(element: Element): string {
   return (element instanceof HTMLElement ? element.innerText : element.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 500);
 }
+const PDF_LINKS = "#viewer .annotationLayer";
+type Caret = { offsetNode: Node; offset: number };
+// The caret under the pointer. Over a PDF link the browser gives the link's transparent box, so there it is counted
+// out on the text piece underneath: the first character whose middle is right of the pointer.
+function caretAt(x: number, y: number): Caret | null {
+  const caret = document.caretPositionFromPoint(x, y), node = caret?.offsetNode;
+  if (!(node instanceof Element ? node : node?.parentElement)?.closest(PDF_LINKS)) return caret;
+  const text = document.elementsFromPoint(x, y).find((element) => element.matches("#viewer .textLayer span"))?.firstChild;
+  if (text?.nodeType !== Node.TEXT_NODE) return null;
+  const range = document.createRange(), length = text.textContent?.length ?? 0;
+  for (let offset = 0; offset < length; offset++) {
+    range.setStart(text, offset);
+    range.setEnd(text, offset + 1);
+    const box = range.getBoundingClientRect();
+    if (box.width && x < box.left + box.width / 2) return { offsetNode: text, offset };
+  }
+  return { offsetNode: text, offset: length };
+}
 // The caret under the pointer when it is on the characters themselves, not the blank part of their box.
-function textAt(x: number, y: number): CaretPosition | null {
-  const caret = document.caretPositionFromPoint(x, y), node = caret?.offsetNode, parent = node?.parentElement;
+function textAt(x: number, y: number): Caret | null {
+  const caret = caretAt(x, y), node = caret?.offsetNode, parent = node?.parentElement;
   if (node?.nodeType !== Node.TEXT_NODE || !node.textContent?.trim() || !parent || getComputedStyle(parent).userSelect === "none") return null;
   const range = document.createRange();
   range.selectNodeContents(node);
